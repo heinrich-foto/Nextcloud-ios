@@ -51,7 +51,6 @@ class NCAccount: NSObject {
                                           userId: user,
                                           password: password,
                                           userAgent: userAgent,
-                                          nextcloudVersion: NCCapabilities.shared.getCapabilities(account: account).capabilityServerVersionMajor,
                                           httpMaximumConnectionsPerHost: NCBrandOptions.shared.httpMaximumConnectionsPerHost,
                                           httpMaximumConnectionsPerHostInDownload: NCBrandOptions.shared.httpMaximumConnectionsPerHostInDownload,
                                           httpMaximumConnectionsPerHostInUpload: NCBrandOptions.shared.httpMaximumConnectionsPerHostInUpload,
@@ -114,8 +113,6 @@ class NCAccount: NSObject {
         if let tblAccount = database.setAccountActive(account) {
             /// Set account
             controller?.account = account
-            /// Set capabilities
-            database.setCapabilities(account: account)
             /// Set User Profile
             if let userProfile {
                 database.setAccountUserProfile(account: account, userProfile: userProfile)
@@ -126,7 +123,7 @@ class NCAccount: NSObject {
             NCService().startRequestServicesServer(account: account, controller: controller)
             /// Start the auto upload
             Task {
-                let num = await NCAutoUpload.shared.initAutoUpload(controller: nil, account: account)
+                let num = await NCAutoUpload.shared.initAutoUpload(tblAccount: tblAccount)
                 nkLog(start: "Auto upload with \(num) photo")
             }
             /// Networking Process

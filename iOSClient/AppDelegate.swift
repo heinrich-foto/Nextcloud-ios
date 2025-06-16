@@ -249,15 +249,42 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
 
     func backgroundSync(tblAccount: tableAccount) async -> Int {
         var numTransfers: Int = 0
-        var creationFolderAutoUploadInError: Bool = false
         let sortDescriptors = [
             RealmSwift.SortDescriptor(keyPath: "sessionDate", ascending: true)
         ]
+        let limitTansfers: Int = 5
+
+        /// DOWNLOAD
+        let metadatasWaitDownlod = await self.database.getMetadatasAsync(predicate: NSPredicate(format: "status == %d", self.global.metadataStatusWaitDownload), sortDescriptors: sortDescriptors, limit: NCBrandOptions.shared.httpMaximumConnectionsPerHostInDownload)
+
+        if let metadatasWaitDownlod,
+           !metadatasWaitDownlod.isEmpty {
+            for metadata in metadatasWaitDownlod {
+                let error = await self.networking.downloadFileInBackgroundAsync(metadata: metadata)
+
+                if error == .success {
+                    nkLog(tag: self.global.logTagBgSync, message: "Create new download \(metadata.fileName) in \(metadata.serverUrl)")
+                } else {
+                    nkLog(tag: self.global.logTagBgSync, emoji: .error, message: "Download failure \(metadata.fileName) in \(metadata.serverUrl) with error \(error.errorDescription)")
+                }
+
+                numTransfers += 1
+            }
+        }
+
+        if numTransfers >= limitTansfers {
+            return numTransfers
+        }
+
+        /// AUTO UPLOAD  for get new photo
+        let num = await NCAutoUpload.shared.initAutoUpload(tblAccount: tblAccount)
+        nkLog(tag: self.global.logTagBgSync, emoji: .start, message: "Auto upload with \(num) new photo for \(tblAccount.account)")
 
         /// CREATION FOLDERS
-        let metadatasWaitCreateFolder = await self.database.getMetadatasAsync(predicate: NSPredicate(format: "status == %d AND sessionSelector == %@", self.global.metadataStatusWaitCreateFolder, self.global.selectorUploadAutoUpload), limit: nil)
+        let metadatasWaitCreateFolder = await self.database.getMetadatasAsync(predicate: NSPredicate(format: "status == %d AND sessionSelector == %@", self.global.metadataStatusWaitCreateFolder, self.global.selectorUploadAutoUpload), limit: limitTansfers)
 
-        if let metadatasWaitCreateFolder {
+        if let metadatasWaitCreateFolder,
+            !metadatasWaitCreateFolder.isEmpty {
             for metadata in metadatasWaitCreateFolder {
                 let serverUrl = metadata.serverUrl + "/" + metadata.fileName
                 let resultsCreateFolder = await self.networking.createFolder(fileName: metadata.fileName,
@@ -269,8 +296,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
                 guard resultsCreateFolder.error == .success else {
                     nkLog(tag: self.global.logTagBgSync, emoji: .error, message: "Auto upload create folder \(serverUrl) with error: \(resultsCreateFolder.error.errorCode)")
 
-                    creationFolderAutoUploadInError = true
-                    break
+                    return numTransfers
                 }
 
                 nkLog(tag: self.global.logTagBgSync, message: "Auto upload create folder \(serverUrl)")
@@ -281,16 +307,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
             }
         }
 
-        /// AUTO UPLOAD  for get new photo
-        if tblAccount.autoUploadStart,
-           tblAccount.autoUploadOnlyNew {
-            let num = await NCAutoUpload.shared.initAutoUpload(account: tblAccount.account)
-            nkLog(tag: self.global.logTagBgSync, emoji: .start, message: "Auto upload with \(num) new photo for \(tblAccount.account)")
+        if numTransfers >= limitTansfers {
+            return numTransfers
         }
 
         /// UPLOAD
-        if !creationFolderAutoUploadInError,
-           let metadatasWaitUpload = await self.database.getMetadatasAsync(predicate: NSPredicate(format: "status == %d AND sessionSelector == %@ AND chunk == 0", self.global.metadataStatusWaitUpload, self.global.selectorUploadAutoUpload), sortDescriptors: sortDescriptors, limit: NCBrandOptions.shared.httpMaximumConnectionsPerHostInUpload) {
+        let metadatasWaitUpload = await self.database.getMetadatasAsync(predicate: NSPredicate(format: "status == %d AND sessionSelector == %@ AND chunk == 0", self.global.metadataStatusWaitUpload, self.global.selectorUploadAutoUpload), sortDescriptors: sortDescriptors, limit: limitTansfers)
+
+        if let metadatasWaitUpload,
+           !metadatasWaitUpload.isEmpty {
 
             let metadatas = await NCCameraRoll().extractCameraRoll(from: metadatasWaitUpload)
 
@@ -301,22 +326,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
                     nkLog(tag: self.global.logTagBgSync, message: "Create new upload \(metadata.fileName) in \(metadata.serverUrl)")
                 } else {
                     nkLog(tag: self.global.logTagBgSync, emoji: .error, message: "Upload failure \(metadata.fileName) in \(metadata.serverUrl) with error \(error.errorDescription)")
-                }
-
-                numTransfers += 1
-            }
-        }
-
-        /// DOWNLOAD
-        if let metadatasWaitDownlod = await self.database.getMetadatasAsync(predicate: NSPredicate(format: "status == %d", self.global.metadataStatusWaitDownload), sortDescriptors: sortDescriptors, limit: NCBrandOptions.shared.httpMaximumConnectionsPerHostInDownload) {
-
-            for metadata in metadatasWaitDownlod {
-                let error = await self.networking.downloadFileInBackgroundAsync(metadata: metadata)
-
-                if error == .success {
-                    nkLog(tag: self.global.logTagBgSync, message: "Create new download \(metadata.fileName) in \(metadata.serverUrl)")
-                } else {
-                    nkLog(tag: self.global.logTagBgSync, emoji: .error, message: "Download failure \(metadata.fileName) in \(metadata.serverUrl) with error \(error.errorDescription)")
                 }
 
                 numTransfers += 1
