@@ -266,7 +266,7 @@ class NCNetworkingProcess {
                                             metadata: metadata,
                                             error: resultsCreateFolder.error)
                 } others: { delegate in
-                    delegate.transferReloadData(serverUrl: metadata.serverUrl)
+                    delegate.transferReloadData(serverUrl: metadata.serverUrl, status: nil)
                 }
             } else {
                 NCNetworking.shared.notifyAllDelegates { delegate in
@@ -471,22 +471,5 @@ class NCNetworkingProcess {
 
     func setCurrentAccount(_ account: String) {
         self.currentAccount = account
-    }
-
-    func createProcessUploads(metadatas: [tableMetadata], verifyAlreadyExists: Bool = false, completion: @escaping (_ items: Int) -> Void = {_ in}) {
-        var metadatasForUpload: [tableMetadata] = []
-        for metadata in metadatas {
-            if verifyAlreadyExists {
-                if self.database.getMetadata(predicate: NSPredicate(format: "account == %@ && serverUrl == %@ && fileName == %@ && session != ''",
-                                                                    metadata.account,
-                                                                    metadata.serverUrl,
-                                                                    metadata.fileName)) != nil {
-                    continue
-                }
-            }
-            metadatasForUpload.append(metadata)
-        }
-        self.database.addMetadatas(metadatasForUpload, sync: false)
-        completion(metadatasForUpload.count)
     }
 }

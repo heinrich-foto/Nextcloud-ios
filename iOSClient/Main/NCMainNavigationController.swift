@@ -190,54 +190,59 @@ class NCMainNavigationController: UINavigationController, UINavigationController
             return
         }
 
-        let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: session.account)
-        let resultsCount = self.database.getResultsMetadatas(predicate: NSPredicate(format: "status != %i", self.global.metadataStatusNormal))?.count ?? 0
-        var tempRightBarButtonItems: [UIBarButtonItem] = createRightMenu() == nil ? [] : [self.menuBarButtonItem]
-        var tempTotalTags = tempRightBarButtonItems.count == 0 ? 0 : self.menuBarButtonItem.tag
-        var totalTags = 0
+        Task {
+            let tranfersCount = await self.database.getMetadatasAsync(predicate: NSPredicate(format: "status != %i", self.global.metadataStatusNormal))?.count ?? 0
 
-        if let rightBarButtonItems = topViewController?.navigationItem.rightBarButtonItems {
-            for item in rightBarButtonItems {
-                totalTags = totalTags + item.tag
-            }
-        }
+            await MainActor.run {
+                let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: session.account)
+                var tempRightBarButtonItems: [UIBarButtonItem] = createRightMenu() == nil ? [] : [self.menuBarButtonItem]
+                var tempTotalTags = tempRightBarButtonItems.count == 0 ? 0 : self.menuBarButtonItem.tag
+                var totalTags = 0
 
-        if capabilities.assistantEnabled {
-            tempRightBarButtonItems.append(self.assistantButtonItem)
-            tempTotalTags = tempTotalTags + self.assistantButtonItem.tag
-        }
+                if let rightBarButtonItems = topViewController?.navigationItem.rightBarButtonItems {
+                    for item in rightBarButtonItems {
+                        totalTags += item.tag
+                    }
+                }
 
-        if let controller, controller.availableNotifications {
-            tempRightBarButtonItems.append(self.notificationsButtonItem)
-            tempTotalTags = tempTotalTags + self.notificationsButtonItem.tag
-        }
+                if capabilities.assistantEnabled {
+                    tempRightBarButtonItems.append(self.assistantButtonItem)
+                    tempTotalTags += self.assistantButtonItem.tag
+                }
 
-        if resultsCount > 0 {
-            tempRightBarButtonItems.append(self.transfersButtonItem)
-            tempTotalTags = tempTotalTags + self.transfersButtonItem.tag
-        }
+                if let controller, controller.availableNotifications {
+                    tempRightBarButtonItems.append(self.notificationsButtonItem)
+                    tempTotalTags += self.notificationsButtonItem.tag
+                }
 
-        if totalTags != tempTotalTags {
-            topViewController?.navigationItem.rightBarButtonItems = tempRightBarButtonItems
-        }
+                if tranfersCount > 0 {
+                    tempRightBarButtonItems.append(self.transfersButtonItem)
+                    tempTotalTags += self.transfersButtonItem.tag
+                }
 
-        // Update App Icon badge / File Icon badge
+                if totalTags != tempTotalTags {
+                    topViewController?.navigationItem.rightBarButtonItems = tempRightBarButtonItems
+                }
+
+                // Update App Icon badge / File Icon badge
 #if DEBUG
-        if UIApplication.shared.applicationIconBadgeNumber != resultsCount {
-            UIApplication.shared.applicationIconBadgeNumber = resultsCount
-        }
-        fileItem?.badgeValue = resultsCount == 0 ? nil : "\(resultsCount)"
+                if UIApplication.shared.applicationIconBadgeNumber != tranfersCount {
+                    UIApplication.shared.applicationIconBadgeNumber = tranfersCount
+                }
+                fileItem?.badgeValue = tranfersCount == 0 ? nil : "\(tranfersCount)"
 #else
-        if resultsCount > 999 {
-            UIApplication.shared.applicationIconBadgeNumber = 999
-            fileItem?.badgeValue = "999+"
-        } else {
-            if UIApplication.shared.applicationIconBadgeNumber != resultsCount {
-                UIApplication.shared.applicationIconBadgeNumber = resultsCount
-            }
-            fileItem?.badgeValue = resultsCount == 0 ? nil : "\(resultsCount)"
-        }
+                if tranfersCount > 999 {
+                    UIApplication.shared.applicationIconBadgeNumber = 999
+                    fileItem?.badgeValue = "999+"
+                } else {
+                    if UIApplication.shared.applicationIconBadgeNumber != tranfersCount {
+                        UIApplication.shared.applicationIconBadgeNumber = tranfersCount
+                    }
+                    fileItem?.badgeValue = tranfersCount == 0 ? nil : "\(tranfersCount)"
+                }
 #endif
+            }
+        }
     }
 
     func createRightMenu() -> UIMenu? { return nil }
@@ -337,7 +342,7 @@ class NCMainNavigationController: UINavigationController, UINavigationController
             NCKeychain().setFavoriteOnTop(account: self.session.account, value: !favoriteOnTop)
 
             NCNetworking.shared.notifyAllDelegates { delegate in
-                delegate.transferReloadData(serverUrl: collectionViewCommon.serverUrl)
+                delegate.transferReloadData(serverUrl: collectionViewCommon.serverUrl, status: nil)
             }
             self.updateRightMenu()
         }
@@ -347,7 +352,7 @@ class NCMainNavigationController: UINavigationController, UINavigationController
             NCKeychain().setDirectoryOnTop(account: self.session.account, value: !directoryOnTop)
 
             NCNetworking.shared.notifyAllDelegates { delegate in
-                delegate.transferReloadData(serverUrl: collectionViewCommon.serverUrl)
+                delegate.transferReloadData(serverUrl: collectionViewCommon.serverUrl, status: nil)
             }
             self.updateRightMenu()
         }
@@ -364,7 +369,7 @@ class NCMainNavigationController: UINavigationController, UINavigationController
             NCKeychain().setPersonalFilesOnly(account: self.session.account, value: !personalFilesOnly)
 
             NCNetworking.shared.notifyAllDelegates { delegate in
-                delegate.transferReloadData(serverUrl: collectionViewCommon.serverUrl)
+                delegate.transferReloadData(serverUrl: collectionViewCommon.serverUrl, status: nil)
             }
             self.updateRightMenu()
         }
@@ -374,7 +379,7 @@ class NCMainNavigationController: UINavigationController, UINavigationController
             NCKeychain().showDescription = !showDescriptionKeychain
 
             NCNetworking.shared.notifyAllDelegates { delegate in
-                delegate.transferReloadData(serverUrl: collectionViewCommon.serverUrl)
+                delegate.transferReloadData(serverUrl: collectionViewCommon.serverUrl, status: nil)
             }
             self.updateRightMenu()
         }
@@ -414,9 +419,16 @@ class NCMainNavigationController: UINavigationController, UINavigationController
             trashViewController.onGridSelected()
             self.updateRightMenu()
         }
+
+        let emptyTrash = UIAction(title: NSLocalizedString("_empty_trash_", comment: ""), image: utility.loadImage(named: "trash", colors: [NCBrandColor.shared.iconImageColor])) { _ in
+            Task {
+                await trashViewController.emptyTrash()
+            }
+        }
+
         let viewStyleSubmenu = UIMenu(title: "", options: .displayInline, children: [list, grid])
 
-        return [select, viewStyleSubmenu]
+        return [select, viewStyleSubmenu, emptyTrash]
     }
 
     func isNotificationsButtonVisible() -> Bool {

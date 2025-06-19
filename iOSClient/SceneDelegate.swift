@@ -27,6 +27,7 @@ import NextcloudKit
 import WidgetKit
 import SwiftEntryKit
 import SwiftUI
+import CoreLocation
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -183,7 +184,9 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func sceneDidEnterBackground(_ scene: UIScene) {
         nkLog(debug: "Scene did enter in background")
-        database.backupTableAccountToFile()
+        Task {
+            await database.backupTableAccountToFileAsync()
+        }
         let session = SceneManager.shared.getSession(scene: scene)
         guard let tableAccount = self.database.getTableAccount(predicate: NSPredicate(format: "account == %@", session.account)) else {
             return
@@ -192,9 +195,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         nkLog(info: "Auto upload in background: \(tableAccount.autoUploadStart)")
         nkLog(info: "Update in background: \(UIApplication.shared.backgroundRefreshStatus == .available)")
 
-        NCBackgroundLocationUploadManager.shared.start(from: nil)
-        NCBackgroundLocationUploadManager.shared.checkLocationServiceIsActive { active in
-            nkLog(tag: self.global.logTagLocation, emoji: .info, message: "Location service: \(active)")
+        if CLLocationManager().authorizationStatus == .authorizedAlways && NCKeychain().location && tableAccount.autoUploadStart {
+            NCBackgroundLocationUploadManager.shared.start()
+        } else {
+            NCBackgroundLocationUploadManager.shared.stop()
         }
 
         if let error = NCAccount().updateAppsShareAccounts() {

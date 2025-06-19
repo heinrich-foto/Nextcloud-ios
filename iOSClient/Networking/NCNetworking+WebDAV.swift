@@ -306,7 +306,7 @@ extension NCNetworking {
             deleteLocalFile(metadata: metadata)
 
             self.notifyAllDelegates { delegate in
-                delegate.transferReloadData(serverUrl: metadata.serverUrl)
+                delegate.transferReloadData(serverUrl: metadata.serverUrl, status: nil)
             }
         }
 
@@ -332,8 +332,9 @@ extension NCNetworking {
             }
         }
 
-#if !EXTENSION
         if !metadatasE2EE.isEmpty {
+#if !EXTENSION
+
             if isOffline {
                 return NCContentPresenter().showInfo(error: NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_offline_not_allowed_"))
             }
@@ -366,25 +367,40 @@ extension NCNetworking {
                 }
                 ncHud.dismiss()
             }
-        }
 #endif
+        } else {
+            var ocIds = Set<String>()
+            var serverUrls = Set<String>()
 
-        for metadata in metadatasPlain {
-            let permission = NCUtility().permissionsContainsString(metadata.permissions, permissions: NCPermissions().permissionCanDelete)
-            if (!metadata.permissions.isEmpty && permission == false) || (metadata.status != global.metadataStatusNormal) {
-                return NCContentPresenter().showInfo(error: NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_no_permission_delete_file_"))
-            }
-
-            if metadata.status == global.metadataStatusWaitCreateFolder {
-                let metadatas = database.getMetadatas(predicate: NSPredicate(format: "account == %@ AND serverUrl BEGINSWITH %@", metadata.account, metadata.serverUrl))
-                for metadata in metadatas {
-                    database.deleteMetadataOcId(metadata.ocId)
-                    utilityFileSystem.removeFile(atPath: utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId))
+            for metadata in metadatasPlain {
+                let permission = NCUtility().permissionsContainsString(metadata.permissions, permissions: NCPermissions().permissionCanDelete)
+                if (!metadata.permissions.isEmpty && permission == false) || (metadata.status != global.metadataStatusNormal) {
+                    return NCContentPresenter().showInfo(error: NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_no_permission_delete_file_"))
                 }
-                return
+
+                if metadata.status == global.metadataStatusWaitCreateFolder {
+                    let metadatas = database.getMetadatas(predicate: NSPredicate(format: "account == %@ AND serverUrl BEGINSWITH %@", metadata.account, metadata.serverUrl))
+                    for metadata in metadatas {
+                        database.deleteMetadataOcId(metadata.ocId)
+                        utilityFileSystem.removeFile(atPath: utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId))
+                    }
+                    return
+                }
+
+                ocIds.insert(metadata.ocId)
+                serverUrls.insert(metadata.serverUrl)
             }
-            self.database.setMetadataStatus(ocId: metadata.ocId,
-                                            status: NCGlobal.shared.metadataStatusWaitDelete)
+
+            self.notifyAllDelegates { delegate in
+                Task {
+                    let status = self.global.metadataStatusWaitDelete
+                    await self.database.setMetadataStatusAsync(ocIds: Array(ocIds),
+                                                               status: status)
+                    serverUrls.forEach { serverUrl in
+                        delegate.transferReloadData(serverUrl: serverUrl, status: status)
+                    }
+                }
+            }
         }
     }
 
@@ -410,7 +426,13 @@ extension NCNetworking {
             }
 #endif
         } else {
-            self.database.renameMetadata(fileNameNew: fileNameNew, ocId: metadata.ocId, status: NCGlobal.shared.metadataStatusWaitRename)
+            self.notifyAllDelegates { delegate in
+                Task {
+                    let status = self.global.metadataStatusWaitRename
+                    await self.database.renameMetadataAsync(fileNameNew: fileNameNew, ocId: metadata.ocId, status: status)
+                    delegate.transferReloadData(serverUrl: metadata.serverUrl, status: status)
+                }
+            }
         }
     }
 
@@ -424,7 +446,13 @@ extension NCNetworking {
             return NCContentPresenter().showInfo(error: NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_no_permission_modify_file_"))
         }
 
-        self.database.setMetadataCopyMove(ocId: metadata.ocId, serverUrlTo: serverUrlTo, overwrite: overwrite.description, status: NCGlobal.shared.metadataStatusWaitMove)
+        self.notifyAllDelegates { delegate in
+            Task {
+                let status = self.global.metadataStatusWaitMove
+                await self.database.setMetadataCopyMoveAsync(ocId: metadata.ocId, serverUrlTo: serverUrlTo, overwrite: overwrite.description, status: status)
+                delegate.transferReloadData(serverUrl: metadata.serverUrl, status: status)
+            }
+        }
     }
 
     // MARK: - Copy
@@ -437,7 +465,13 @@ extension NCNetworking {
             return NCContentPresenter().showInfo(error: NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_no_permission_modify_file_"))
         }
 
-        self.database.setMetadataCopyMove(ocId: metadata.ocId, serverUrlTo: serverUrlTo, overwrite: overwrite.description, status: NCGlobal.shared.metadataStatusWaitCopy)
+        self.notifyAllDelegates { delegate in
+            Task {
+                let status = self.global.metadataStatusWaitCopy
+                await self.database.setMetadataCopyMoveAsync(ocId: metadata.ocId, serverUrlTo: serverUrlTo, overwrite: overwrite.description, status: status)
+                delegate.transferReloadData(serverUrl: metadata.serverUrl, status: status)
+            }
+        }
     }
 
     // MARK: - Favorite
@@ -448,12 +482,12 @@ extension NCNetworking {
             return NCContentPresenter().showInfo(error: NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_no_permission_favorite_file_"))
         }
 
-        self.database.setMetadataFavorite(ocId: metadata.ocId, favorite: !metadata.favorite, saveOldFavorite: metadata.favorite.description, status: global.metadataStatusWaitFavorite)
-
-        notifyAllDelegates { delegate in
-            delegate.transferChange(status: self.global.networkingStatusFavorite,
-                                    metadata: metadata,
-                                    error: .success)
+        self.notifyAllDelegates { delegate in
+            Task {
+                let status = self.global.metadataStatusWaitFavorite
+                await self.database.setMetadataFavoriteAsync(ocId: metadata.ocId, favorite: !metadata.favorite, saveOldFavorite: metadata.favorite.description, status: status)
+                delegate.transferReloadData(serverUrl: metadata.serverUrl, status: status)
+            }
         }
     }
 
@@ -472,7 +506,7 @@ extension NCNetworking {
                 self.database.addMetadata(metadata)
 
                 self.notifyAllDelegates { delegate in
-                    delegate.transferReloadData(serverUrl: metadata.serverUrl)
+                    delegate.transferReloadData(serverUrl: metadata.serverUrl, status: nil)
                 }
             }
         }

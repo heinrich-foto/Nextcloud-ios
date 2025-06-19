@@ -58,6 +58,7 @@ class NCViewerRichDocument: UIViewController, WKNavigationDelegate, WKScriptMess
         }
         navigationController?.navigationBar.prefersLargeTitles = false
         navigationItem.title = metadata.fileNameView
+        navigationItem.hidesBackButton = true
 
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.nonPersistent()
@@ -349,7 +350,7 @@ extension NCViewerRichDocument: UINavigationControllerDelegate {
 
         if parent == nil {
             NCNetworking.shared.notifyAllDelegates { delegate in
-                delegate.transferReloadData(serverUrl: metadata.serverUrl)
+                delegate.transferReloadData(serverUrl: metadata.serverUrl, status: nil)
             }
         }
     }

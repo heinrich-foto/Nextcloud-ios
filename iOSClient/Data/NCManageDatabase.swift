@@ -16,8 +16,8 @@ protocol DateCompareable {
 final class NCManageDatabase: Sendable {
     static let shared = NCManageDatabase()
 
-    private let realmQueue = DispatchQueue(label: "com.nextcloud.realmQueue") // serial queue
-    private let realmQueueKey = DispatchSpecificKey<Bool>()
+    internal let realmQueue = DispatchQueue(label: "com.nextcloud.realmQueue") // serial queue
+    internal let realmQueueKey = DispatchSpecificKey<Bool>()
 
     let utilityFileSystem = NCUtilityFileSystem()
 
@@ -53,6 +53,31 @@ final class NCManageDatabase: Sendable {
 
             return shouldCompact
         }
+
+        func restoreDB() {
+            if let realmURL = databaseFileUrlPath {
+                let filesToDelete = [
+                    realmURL,
+                    realmURL.appendingPathExtension("lock"),
+                    realmURL.appendingPathExtension("note"),
+                    realmURL.appendingPathExtension("management")
+                ]
+
+                for file in filesToDelete {
+                    do {
+                        try FileManager.default.removeItem(at: file)
+                    } catch { }
+                }
+            }
+
+            do {
+                _ = try Realm()
+                restoreTableAccountFromFile()
+            } catch let error {
+                nkLog(error: "Account restoration: \(error)")
+            }
+        }
+
         var realm: Realm?
         let dirGroup = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: NCBrandOptions.shared.capabilitiesGroup)
         let databaseFileUrlPath = dirGroup?.appendingPathComponent(NCGlobal.shared.appDatabaseNextcloud + "/" + databaseName)
@@ -119,7 +144,8 @@ final class NCManageDatabase: Sendable {
                     print("Realm is located at: \(url)")
                 }
             } catch let error {
-                nkLog(error: "DATABASE: \(error.localizedDescription)")
+                nkLog(error: "Realm: \(error)")
+                restoreDB()
             }
         } else {
             Realm.Configuration.defaultConfiguration =
@@ -135,35 +161,9 @@ final class NCManageDatabase: Sendable {
                 if let realm, let url = realm.configuration.fileURL {
                     print("Realm is located at: \(url)")
                 }
-
-                backupTableAccountToFile()
-
             } catch let error {
-                nkLog(error: "DATABASE: \(error.localizedDescription)")
-
-                if let realmURL = databaseFileUrlPath {
-                    let filesToDelete = [
-                        realmURL,
-                        realmURL.appendingPathExtension("lock"),
-                        realmURL.appendingPathExtension("note"),
-                        realmURL.appendingPathExtension("management")
-                    ]
-
-                    for file in filesToDelete {
-                        do {
-                            try FileManager.default.removeItem(at: file)
-                        } catch { }
-                    }
-                }
-
-                do {
-                    _ = try Realm()
-
-                    restoreTableAccountFromFile()
-
-                } catch let error {
-                    nkLog(error: "Account restoration: \(error.localizedDescription)")
-                }
+                nkLog(error: "Realm: \(error)")
+                restoreDB()
             }
         }
     }
