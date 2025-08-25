@@ -33,7 +33,7 @@ extension NCNetworking {
                                     metadata.path,
                                     metadata.livePhotoFile)
 
-        let metadataLast = await self.database.getMetadataAsync(predicate: predicate)
+        let metadataLast = await NCManageDatabase.shared.getMetadataAsync(predicate: predicate)
 
         if let metadataLast {
             if metadataLast.status != self.global.metadataStatusNormal {
@@ -44,14 +44,13 @@ extension NCNetworking {
 
         } else {
             metadata.livePhotoFile = ""
-            let metadata = await self.database.addMetadataAsync(metadata)
-            self.notifyAllDelegates { delegate in
+            await NCManageDatabase.shared.addMetadataAsync(metadata)
+            await self.transferDispatcher.notifyAllDelegates { delegate in
                 delegate.transferChange(status: self.global.networkingStatusUploadedLivePhoto,
                                         metadata: metadata,
                                         error: .success)
             }
         }
-
     }
 
     func setLivePhoto(metadataFirst: tableMetadata?, metadataLast: tableMetadata?, livePhoto: Bool = true) async {
@@ -65,7 +64,7 @@ extension NCNetworking {
         }
         let resultsMetadataFirst = await NextcloudKit.shared.setLivephotoAsync(serverUrlfileNamePath: serverUrlfileNamePathFirst, livePhotoFile: livePhotoFileId, account: metadataFirst.account)
         if resultsMetadataFirst.error == .success {
-            await database.setMetadataLivePhotoByServerAsync(account: metadataFirst.account, ocId: metadataFirst.ocId, livePhotoFile: livePhotoFileId)
+            await NCManageDatabase.shared.setMetadataLivePhotoByServerAsync(account: metadataFirst.account, ocId: metadataFirst.ocId, livePhotoFile: livePhotoFileId)
         }
 
         ///  METADATA LAST
@@ -75,14 +74,14 @@ extension NCNetworking {
         }
         let resultsMetadataLast = await NextcloudKit.shared.setLivephotoAsync(serverUrlfileNamePath: serverUrlfileNamePathLast, livePhotoFile: livePhotoFileId, account: metadataLast.account)
         if resultsMetadataLast.error == .success {
-            await database.setMetadataLivePhotoByServerAsync(account: metadataLast.account, ocId: metadataLast.ocId, livePhotoFile: livePhotoFileId)
+            await NCManageDatabase.shared.setMetadataLivePhotoByServerAsync(account: metadataLast.account, ocId: metadataLast.ocId, livePhotoFile: livePhotoFileId)
         }
 
         if resultsMetadataFirst.error == .success, resultsMetadataLast.error == .success {
             nkLog(debug: "Upload set LivePhoto for files " + (metadataFirst.fileName as NSString).deletingPathExtension)
-            notifyAllDelegates { delegate in
+            await self.transferDispatcher.notifyAllDelegates { delegate in
                delegate.transferChange(status: self.global.networkingStatusUploadedLivePhoto,
-                                       metadata: tableMetadata(value: metadataFirst),
+                                       metadata: metadataFirst,
                                        error: .success)
             }
         } else {

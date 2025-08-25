@@ -49,15 +49,6 @@ extension NCManageDatabase {
         }
     }
 
-    func clearAllAvatarLoaded(sync: Bool = true) {
-        performRealmWrite(sync: sync) { realm in
-            let results = realm.objects(tableAvatar.self)
-            for result in results {
-                result.loaded = false
-            }
-        }
-    }
-
     func clearAllAvatarLoadedAsync() async {
         await performRealmWriteAsync { realm in
             let results = realm.objects(tableAvatar.self)
@@ -69,7 +60,8 @@ extension NCManageDatabase {
 
     @discardableResult
     func setAvatarLoaded(fileName: String, sync: Bool = true) -> UIImage? {
-        let fileNameLocalPath = utilityFileSystem.directoryUserData + "/" + fileName
+        let directoryUserData = utilityFileSystem.directoryUserData
+        let fileNameLocalPath = utilityFileSystem.createServerUrl(serverUrl: directoryUserData, fileName: fileName)
         var image: UIImage?
 
         performRealmWrite(sync: sync) { realm in
@@ -92,7 +84,8 @@ extension NCManageDatabase {
     /// - Returns: The `UIImage` if successfully loaded from disk, or `nil` if not found or deleted.
     @discardableResult
     func setAvatarLoadedAsync(fileName: String) async -> UIImage? {
-        let fileNameLocalPath = utilityFileSystem.directoryUserData + "/" + fileName
+        let directoryUserData = utilityFileSystem.directoryUserData
+        let fileNameLocalPath = utilityFileSystem.createServerUrl(serverUrl: directoryUserData, fileName: fileName)
         var image: UIImage?
 
         await performRealmWriteAsync { realm in
@@ -151,7 +144,8 @@ extension NCManageDatabase {
     }
 
     func getImageAvatarLoaded(fileName: String) -> (image: UIImage?, tblAvatar: tableAvatar?) {
-        let fileNameLocalPath = utilityFileSystem.directoryUserData + "/" + fileName
+        let directoryUserData = utilityFileSystem.directoryUserData
+        let fileNameLocalPath = utilityFileSystem.createServerUrl(serverUrl: directoryUserData, fileName: fileName)
         let image = UIImage(contentsOfFile: fileNameLocalPath)
         var tblAvatar: tableAvatar?
 
@@ -169,7 +163,8 @@ extension NCManageDatabase {
     func getImageAvatarLoaded(fileName: String,
                               dispatchOnMainQueue: Bool = true,
                               completion: @escaping (_ image: UIImage?, _ tblAvatar: tableAvatar?) -> Void) {
-        let fileNameLocalPath = utilityFileSystem.directoryUserData + "/" + fileName
+        let directoryUserData = utilityFileSystem.directoryUserData
+        let fileNameLocalPath = utilityFileSystem.createServerUrl(serverUrl: directoryUserData, fileName: fileName)
         let image = UIImage(contentsOfFile: fileNameLocalPath)
 
         performRealmRead({ realm in

@@ -25,11 +25,9 @@ import UIKit
 import NextcloudKit
 
 extension NCNetworking {
-    internal func synchronization(account: String, serverUrl: String, metadatasInDownload: [tableMetadata]?) async {
-        let showHiddenFiles = NCKeychain().getShowHiddenFiles(account: account)
+    internal func synchronization(account: String, serverUrl: String, userId: String, urlBase: String, metadatasInDownload: [tableMetadata]?) async {
+        let showHiddenFiles = NCPreferences().getShowHiddenFiles(account: account)
         let options = NKRequestOptions(timeout: 300, taskDescription: NCGlobal.shared.taskDescriptionSynchronization, queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)
-        var metadatasDirectory: [tableMetadata] = []
-        var metadatasDownload: [tableMetadata] = []
 
         nkLog(tag: self.global.logTagSync, emoji: .start, message: "Start read infinite folder: \(serverUrl)")
 
@@ -40,19 +38,34 @@ extension NCNetworking {
 
             for file in files {
                 if file.directory {
-                    metadatasDirectory.append(self.database.convertFileToMetadata(file, isDirectoryE2EE: false))
-                } else if await isFileDifferent(ocId: file.ocId, fileName: file.fileName, etag: file.etag, metadatasInDownload: metadatasInDownload) {
-                    metadatasDownload.append(self.database.convertFileToMetadata(file, isDirectoryE2EE: false))
-                    nkLog(tag: self.global.logTagSync, emoji: .start, message: "File download: \(file.serverUrl)/\(file.fileName)")
+                    let metadata = await NCManageDatabase.shared.convertFileToMetadataAsync(file)
+                    await NCManageDatabase.shared.addMetadataAsync(metadata)
+                    await NCManageDatabase.shared.addDirectoryAsync(serverUrl: metadata.serverUrlFileName,
+                                                                    ocId: metadata.ocId,
+                                                                    fileId: metadata.fileId,
+                                                                    etag: metadata.etag,
+                                                                    permissions: metadata.permissions,
+                                                                    richWorkspace: metadata.richWorkspace,
+                                                                    favorite: metadata.favorite,
+                                                                    account: metadata.account)
+                } else {
+                    if await isFileDifferent(ocId: file.ocId, fileName: file.fileName, etag: file.etag, metadatasInDownload: metadatasInDownload, userId: userId, urlBase: urlBase) {
+                        let metadata = await NCManageDatabase.shared.convertFileToMetadataAsync(file)
+                        metadata.session = self.sessionDownloadBackground
+                        metadata.sessionSelector = NCGlobal.shared.selectorSynchronizationOffline
+                        metadata.sessionTaskIdentifier = 0
+                        metadata.sessionError = ""
+                        metadata.status = NCGlobal.shared.metadataStatusWaitDownload
+                        metadata.sessionDate = Date()
+
+                        await NCManageDatabase.shared.addMetadataAsync(metadata)
+
+                        nkLog(tag: self.global.logTagSync, emoji: .start, message: "File download: \(file.serverUrl)/\(file.fileName)")
+                    }
                 }
             }
 
-            await self.database.addMetadatasAsync(metadatasDirectory)
-            await self.database.addDirectoriesAsync(metadatas: metadatasDirectory)
-            await self.database.setMetadatasSessionInWaitDownloadAsync(metadatas: metadatasDownload,
-                                                                       session: self.sessionDownloadBackground,
-                                                                       selector: self.global.selectorSynchronizationOffline)
-            await self.database.setDirectorySynchronizationDateAsync(serverUrl: serverUrl, account: account)
+            await NCManageDatabase.shared.setDirectorySynchronizationDateAsync(serverUrl: serverUrl, account: account)
         } else {
             nkLog(tag: self.global.logTagSync, emoji: .error, message: "Read infinite folder: \(serverUrl), error: \(results.error.errorCode)")
         }
@@ -60,16 +73,23 @@ extension NCNetworking {
         nkLog(tag: self.global.logTagSync, emoji: .stop, message: "Stop read infinite folder: \(serverUrl)")
     }
 
-    internal func isFileDifferent(ocId: String, fileName: String, etag: String, metadatasInDownload: [tableMetadata]?) async -> Bool {
+    internal func isFileDifferent(ocId: String,
+                                  fileName: String,
+                                  etag: String,
+                                  metadatasInDownload: [tableMetadata]?,
+                                  userId: String,
+                                  urlBase: String) async -> Bool {
         let match = metadatasInDownload?.contains { $0.ocId == ocId } ?? false
         if match {
             return false
         }
 
-        let localFile = await self.database.getTableLocalFileAsync(predicate: NSPredicate(format: "ocId == %@", ocId))
-        let fileNamePath = self.utilityFileSystem.getDirectoryProviderStorageOcId(ocId, fileNameView: fileName)
+        guard let localFile = await NCManageDatabase.shared.getTableLocalFileAsync(predicate: NSPredicate(format: "ocId == %@", ocId)) else {
+            return true
+        }
+        let fileNamePath = self.utilityFileSystem.getDirectoryProviderStorageOcId(ocId, fileName: fileName, userId: userId, urlBase: urlBase)
         let size = await self.utilityFileSystem.fileSizeAsync(atPath: fileNamePath)
-        let isDifferent = (localFile?.etag != etag) || size == 0
+        let isDifferent = (localFile.etag != etag) || size == 0
 
         return isDifferent
     }

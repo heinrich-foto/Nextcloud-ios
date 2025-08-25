@@ -1,47 +1,13 @@
-//
-//  NCGlobal.swift
-//  Nextcloud
-//
-//  Created by Marino Faggiana on 22/02/21.
-//  Copyright © 2021 Marino Faggiana. All rights reserved.
-//
-//  Author Marino Faggiana <marino.faggiana@nextcloud.com>
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU General Public License for more details.
-//
-//  You should have received a copy of the GNU General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-//
+// SPDX-FileCopyrightText: Nextcloud GmbH
+// SPDX-FileCopyrightText: 2021 Marino Faggiana
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 import UIKit
-
-/// Used for read/write in Realm
-var isAppSuspending: Bool = false
-/// Used for know if the app in in Background mode
-var isAppInBackground: Bool = false
 
 final class NCGlobal: Sendable {
     static let shared = NCGlobal()
 
-    init() {
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
-            isAppSuspending = true
-            isAppInBackground = true
-        }
-
-        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
-            isAppSuspending = false
-            isAppInBackground = false
-        }
-    }
+    init() { }
 
     // ENUM
     //
@@ -170,23 +136,6 @@ final class NCGlobal: Sendable {
     let buttonMoreMore                              = "more"
     let buttonMoreLock                              = "moreLock"
 
-    // Text -  OnlyOffice - Collabora - QuickLook
-    //
-    let editorText                                  = "text"
-    let editorOnlyoffice                            = "onlyoffice"
-    let editorCollabora                             = "collabora"
-    let editorQuickLook                             = "quicklook"
-
-    let onlyofficeDocx                              = "onlyoffice_docx"
-    let onlyofficeXlsx                              = "onlyoffice_xlsx"
-    let onlyofficePptx                              = "onlyoffice_pptx"
-
-    // Template
-    //
-    let templateDocument                            = "document"
-    let templateSpreadsheet                         = "spreadsheet"
-    let templatePresentation                        = "presentation"
-
     // Rich Workspace
     //
     let fileNameRichWorkspace                       = "Readme.md"
@@ -232,7 +181,7 @@ final class NCGlobal: Sendable {
     let errorE2EEVersion: Int                   = -98001
     let errorE2EEKeyChecksums: Int              = -98002
     let errorE2EEKeyEncodeMetadata: Int         = -98003
-    let errorE2EEKeyDecodeMetadata: Int         = -98004
+    let errorE2EEKeyDecodeMetadataV12: Int      = -98004
     let errorE2EEKeyVerifySignature: Int        = -98005
     let errorE2EEKeyCiphertext: Int             = -98006
     let errorE2EEKeyFiledropCiphertext: Int     = -98007
@@ -245,6 +194,8 @@ final class NCGlobal: Sendable {
     let errorE2EEEncodedKey: Int                = -98014
     let errorE2EENoUserFound: Int               = -98015
     let errorE2EEUploadInProgress: Int          = -98016
+    let errorE2EEKeyDirectoryTop: Int           = -98017
+
 
     // Selector
     //
@@ -289,7 +240,7 @@ final class NCGlobal: Sendable {
 
     let metadataStatusUploadingAllMode          = [1,2,3]
     let metadataStatusDownloadingAllMode        = [-1, -2, -3]
-    let metadataStatusInTransfer                = [-1, -2, 1, 2]
+    let metadataStatusForScreenAwake            = [-1, -2, 1, 2]
     let metadataStatusHideInView                = [1, 2, 3, 11]
     let metadataStatusWaitWebDav                = [10, 11, 12, 13, 14, 15]
 
@@ -397,11 +348,6 @@ final class NCGlobal: Sendable {
     //
     let defaultSnapshotConfiguration = "DefaultPreviewConfiguration"
 
-    // FORBIDDEN CHARACTERS
-    //
-    // TODO: Remove this
-    let forbiddenCharacters = ["/", "\\", ":", "\"", "|", "?", "*", "<", ">"]
-
     // DIAGNOSTICS CLIENTS
     //
     let diagnosticIssueSyncConflicts        = "sync_conflicts"
@@ -438,4 +384,10 @@ final class NCGlobal: Sendable {
     let logTagE2EE                          = "E2EE"
     let logTagPN                            = "PUSH NOTIF"
     let logTagSync                          = "SYNC"
+    let logTagServiceProficer               = "SERVICE PROVIDER"
+    let logTagDatabase                      = "DB"
+
+    // USER DEFAULTS
+    let udMigrationMultiDomains             = "migrationMultiDomains"
+    let udLastVersion                       = "lastVersion"
 }

@@ -1,25 +1,6 @@
-//
-//  NCActivityCollectionViewCell.swift
-//  Nextcloud
-//
-//  Created by Henrik Storch on 17/01/2019.
-//  Copyright © 2021. All rights reserved.
-//
-//  Author Henrik Storch <henrik.storch@nextcloud.com>
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU General Public License for more details.
-//
-//  You should have received a copy of the GNU General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-//
+// SPDX-FileCopyrightText: Nextcloud GmbH
+// SPDX-FileCopyrightText: 2019 Marino Faggiana
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 import Foundation
 import UIKit
@@ -47,6 +28,7 @@ class NCActivityTableViewCell: UITableViewCell, NCCellProtocol {
     var activityPreviews: [tableActivityPreview] = []
     var didSelectItemEnable: Bool = true
     var viewController = NCActivity()
+    let utilityFileSystem = NCUtilityFileSystem()
     var account: String!
 
     let utility = NCUtility()
@@ -114,7 +96,9 @@ extension NCActivityTableViewCell: UICollectionViewDelegate {
             guard let activitySubjectRich = NCManageDatabase.shared.getActivitySubjectRich(account: activityPreview.account, idActivity: activityPreview.idActivity, id: String(activityPreview.fileId)) else {
                 return
             }
-            NCDownloadAction.shared.viewerFile(account: account, fileId: activitySubjectRich.id, viewController: viewController)
+            Task {
+                await NCDownloadAction.shared.viewerFile(account: account, fileId: activitySubjectRich.id, viewController: viewController)
+            }
         }
     }
 }
@@ -162,7 +146,7 @@ extension NCActivityTableViewCell: UICollectionViewDataSource {
                 }
             } else {
                 if let activitySubjectRich = NCManageDatabase.shared.getActivitySubjectRich(account: activityPreview.account, idActivity: idActivity, id: fileId) {
-                    let fileNamePath = NCUtilityFileSystem().directoryUserData + "/" + activitySubjectRich.name
+                    let fileNamePath = NCUtilityFileSystem().createServerUrl(serverUrl: utilityFileSystem.directoryUserData, fileName: activitySubjectRich.name)
 
                     if FileManager.default.fileExists(atPath: fileNamePath), let image = UIImage(contentsOfFile: fileNamePath) {
                         cell.imageView.image = image
@@ -173,7 +157,7 @@ extension NCActivityTableViewCell: UICollectionViewDataSource {
                         cell.fileId = fileId
                         if !FileManager.default.fileExists(atPath: fileNamePath) {
                             if NCNetworking.shared.downloadThumbnailActivityQueue.operations.filter({ ($0 as? NCOperationDownloadThumbnailActivity)?.fileId == fileId }).isEmpty {
-                                NCNetworking.shared.downloadThumbnailActivityQueue.addOperation(NCOperationDownloadThumbnailActivity(fileId: fileId, fileNamePreviewLocalPath: fileNamePath, account: account, collectionView: collectionView))
+                                NCNetworking.shared.downloadThumbnailActivityQueue.addOperation(NCOperationDownloadThumbnailActivity(fileId: fileId, etag: "", fileNamePreviewLocalPath: fileNamePath, account: account, collectionView: collectionView))
                             }
                         }
                     }
@@ -203,18 +187,21 @@ class NCOperationDownloadThumbnailActivity: ConcurrentOperation, @unchecked Send
     var fileNamePreviewLocalPath: String
     var fileId: String
     var account: String
+    var etag: String
 
-    init(fileId: String, fileNamePreviewLocalPath: String, account: String, collectionView: UICollectionView?) {
+    init(fileId: String, etag: String, fileNamePreviewLocalPath: String, account: String, collectionView: UICollectionView?) {
         self.fileNamePreviewLocalPath = fileNamePreviewLocalPath
         self.fileId = fileId
         self.account = account
         self.collectionView = collectionView
+        self.etag = etag
     }
 
     override func start() {
         guard !isCancelled else { return self.finish() }
 
         NextcloudKit.shared.downloadPreview(fileId: fileId,
+                                            etag: etag,
                                             account: account) { _, _, _, _, responseData, error in
             if error == .success, let data = responseData?.data, let collectionView = self.collectionView {
                 for case let cell as NCActivityCollectionViewCell in collectionView.visibleCells {

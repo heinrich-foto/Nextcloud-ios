@@ -1,25 +1,6 @@
-//
-//  NCMedia.swift
-//  Nextcloud
-//
-//  Created by Marino Faggiana on 12/02/2019.
-//  Copyright © 2019 Marino Faggiana. All rights reserved.
-//
-//  Author Marino Faggiana <marino.faggiana@nextcloud.com>
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU General Public License for more details.
-//
-//  You should have received a copy of the GNU General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-//
+// SPDX-FileCopyrightText: Nextcloud GmbH
+// SPDX-FileCopyrightText: 2019 Marino Faggiana
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 import Foundation
 import UIKit
@@ -36,9 +17,6 @@ class NCMedia: UIViewController {
     @IBOutlet weak var gradientView: UIView!
     @IBOutlet weak var stackView: UIStackView!
 
-    let semaphoreSearchMedia = DispatchSemaphore(value: 1)
-    let semaphoreNotificationCenter = DispatchSemaphore(value: 1)
-
     let layout = NCMediaLayout()
     var layoutType = NCGlobal.shared.mediaLayoutRatio
     var documentPickerViewController: NCDocumentPickerViewController?
@@ -48,13 +26,11 @@ class NCMedia: UIViewController {
     let utility = NCUtility()
     let database = NCManageDatabase.shared
     let imageCache = NCImageCache.shared
+    let networking = NCNetworking.shared
     var dataSource = NCMediaDataSource()
-    let refreshControl = UIRefreshControl()
     var isTop: Bool = true
     var isEditMode = false
     var fileSelect: [String] = []
-    var filesExists: ThreadSafeArray<String> = ThreadSafeArray()
-    var ocIdDoNotExists: ThreadSafeArray<String> = ThreadSafeArray()
     var searchMediaInProgress: Bool = false
     var attributesZoomIn: UIMenuElement.Attributes = []
     var attributesZoomOut: UIMenuElement.Attributes = []
@@ -127,8 +103,6 @@ class NCMedia: UIViewController {
         collectionView.collectionViewLayout = layout
         layoutType = database.getLayoutForView(account: session.account, key: global.layoutViewMedia, serverUrl: "", layout: global.mediaLayoutRatio).layout
 
-        tabBarSelect = NCMediaSelectTabBar(controller: self.tabBarController, delegate: self)
-
         titleDate.text = ""
 
         menuButton.backgroundColor = .clear
@@ -137,64 +111,84 @@ class NCMedia: UIViewController {
         menuButton.showsMenuAsPrimaryAction = true
         menuButton.configuration = UIButton.Configuration.plain()
         menuButton.setImage(UIImage(systemName: "ellipsis"), for: .normal)
-        menuButton.addBlur(style: .systemUltraThinMaterial)
+        if #available(iOS 26.0, *) {
+        } else {
+            menuButton.addBlur(style: .systemUltraThinMaterial)
+        }
 
         assistantButton.backgroundColor = .clear
         assistantButton.layer.cornerRadius = 15
         assistantButton.layer.masksToBounds = true
         assistantButton.configuration = UIButton.Configuration.plain()
         assistantButton.setImage(UIImage(systemName: "sparkles"), for: .normal)
-        assistantButton.addBlur(style: .systemUltraThinMaterial)
+        if #available(iOS 26.0, *) {
+        } else {
+            assistantButton.addBlur(style: .systemUltraThinMaterial)
+        }
 
         selectOrCancelButton.backgroundColor = .clear
         selectOrCancelButton.layer.cornerRadius = 15
         selectOrCancelButton.layer.masksToBounds = true
         selectOrCancelButton.setTitle( NSLocalizedString("_select_", comment: ""), for: .normal)
-        selectOrCancelButton.addBlur(style: .systemUltraThinMaterial)
+        if #available(iOS 26.0, *) {
+        } else {
+            selectOrCancelButton.addBlur(style: .systemUltraThinMaterial)
+        }
 
         gradient.startPoint = CGPoint(x: 0, y: 0.1)
         gradient.endPoint = CGPoint(x: 0, y: 1)
         gradient.colors = [UIColor.black.withAlphaComponent(UIAccessibility.isReduceTransparencyEnabled ? 0.8 : 0.4).cgColor, UIColor.clear.cgColor]
         gradientView.layer.insertSublayer(gradient, at: 0)
 
-        collectionView.refreshControl = refreshControl
-        refreshControl.action(for: .valueChanged) { _ in
-            self.loadDataSource()
-            self.searchMediaUI(true)
-        }
-
         pinchGesture = UIPinchGestureRecognizer(target: self, action: #selector(handlePinchGesture(_:)))
         collectionView.addGestureRecognizer(pinchGesture)
 
         NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: global.notificationCenterChangeUser), object: nil, queue: nil) { _ in
-            self.layoutType = self.database.getLayoutForView(account: self.session.account, key: self.global.layoutViewMedia, serverUrl: "").layout
-            self.imageCache.removeAll()
-            self.loadDataSource()
-            self.searchMediaUI(true)
+            Task { @MainActor in
+                self.layoutType = self.database.getLayoutForView(account: self.session.account, key: self.global.layoutViewMedia, serverUrl: "").layout
+                self.imageCache.removeAll()
+                await self.loadDataSource()
+                await self.searchMediaUI(true)
+            }
         }
 
         NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: global.notificationCenterClearCache), object: nil, queue: nil) { _ in
-            self.dataSource.metadatas.removeAll()
-            self.imageCache.removeAll()
-            self.searchMediaUI(true)
+            Task {
+                await self.dataSource.clearMetadatas()
+                self.imageCache.removeAll()
+                await self.searchMediaUI(true)
+            }
         }
 
-        NotificationCenter.default.addObserver(self, selector: #selector(networkRemoveAll(_:)), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { _ in
+            Task {
+                await self.networkRemoveAll()
+            }
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
 
-        navigationController?.setMediaAppreance()
+        if tabBarSelect == nil {
+            tabBarSelect = NCMediaSelectTabBar(controller: self.tabBarController, viewController: self, delegate: self)
+        }
+
+        navigationController?.setNavigationBarHidden(true, animated: false)
+
         if dataSource.metadatas.isEmpty {
-            loadDataSource()
+            Task {
+                await loadDataSource()
+            }
         }
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
 
-        NCNetworking.shared.addDelegate(self)
+        Task {
+            await networking.transferDispatcher.addDelegate(self)
+        }
 
         NotificationCenter.default.addObserver(self, selector: #selector(enterForeground(_:)), name: UIApplication.willEnterForegroundNotification, object: nil)
 
@@ -205,11 +199,12 @@ class NCMedia: UIViewController {
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
 
-        NCNetworking.shared.removeDelegate(self)
+        Task {
+            await networking.transferDispatcher.removeDelegate(self)
+            await networkRemoveAll()
+        }
 
         NotificationCenter.default.removeObserver(self, name: UIApplication.willEnterForegroundNotification, object: nil)
-
-        networkRemoveAll(nil)
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
@@ -225,30 +220,30 @@ class NCMedia: UIViewController {
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
 
-        tabBarSelect?.setFrame()
         gradient.frame = gradientView.bounds
     }
 
     func searchNewMedia() {
         timerSearchNewMedia?.invalidate()
-        timerSearchNewMedia = Timer.scheduledTimer(timeInterval: timeIntervalSearchNewMedia, target: self, selector: #selector(searchMediaUI(_:)), userInfo: nil, repeats: false)
+        timerSearchNewMedia = Timer.scheduledTimer(withTimeInterval: timeIntervalSearchNewMedia, repeats: false) { [weak self] _ in
+            Task { [weak self] in
+                guard let self else { return }
+                await self.searchMediaUI()
+            }
+        }
     }
 
     // MARK: - NotificationCenter
 
-    @objc func networkRemoveAll(_ sender: Any?) {
+    func networkRemoveAll() async {
         timerSearchNewMedia?.invalidate()
         timerSearchNewMedia = nil
-        filesExists.removeAll()
 
-        NCNetworking.shared.fileExistsQueue.cancelAll()
-        NCNetworking.shared.downloadThumbnailQueue.cancelAll()
+        networking.downloadThumbnailQueue.cancelAll()
 
-        Task {
-            let tasks = await NCNetworking.shared.getAllDataTask()
-            for task in tasks.filter({ $0.taskDescription == global.taskDescriptionRetrievesProperties }) {
-                task.cancel()
-            }
+        let tasks = await networking.getAllDataTask()
+        for task in tasks.filter({ $0.taskDescription == global.taskDescriptionRetrievesProperties }) {
+            task.cancel()
         }
     }
 
@@ -315,13 +310,16 @@ extension NCMedia: UIScrollViewDelegate {
 extension NCMedia: NCSelectDelegate {
     func dismissSelect(serverUrl: String?, metadata: tableMetadata?, type: String, items: [Any], overwrite: Bool, copy: Bool, move: Bool, session: NCSession.Session) {
         guard let serverUrl else { return }
-        let home = utilityFileSystem.getHomeServer(session: session)
-        let mediaPath = serverUrl.replacingOccurrences(of: home, with: "")
 
-        database.setAccountMediaPath(mediaPath, account: session.account)
+        Task {
+            let home = utilityFileSystem.getHomeServer(session: session)
+            let mediaPath = serverUrl.replacingOccurrences(of: home, with: "")
 
-        imageCache.removeAll()
-        loadDataSource()
-        searchNewMedia()
+            await database.setAccountMediaPathAsync(mediaPath, account: session.account)
+
+            imageCache.removeAll()
+            await loadDataSource()
+            searchNewMedia()
+        }
     }
 }

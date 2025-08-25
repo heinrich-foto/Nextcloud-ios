@@ -68,24 +68,24 @@ final class NCCameraRoll: CameraRollExtractor {
         }
 
         var metadatas: [tableMetadata] = []
-        let metadataSource = tableMetadata(value: metadata)
+        let metadataSource = metadata.detachedCopy()
         let chunkSize = NCNetworking.shared.networkReachability == .reachableEthernetOrWiFi
             ? NCGlobal.shared.chunkSizeMBEthernetOrWiFi
             : NCGlobal.shared.chunkSizeMBCellular
 
         guard !metadataSource.assetLocalIdentifier.isEmpty else {
-            let filePath = utilityFileSystem.getDirectoryProviderStorageOcId(metadataSource.ocId, fileNameView: metadataSource.fileName)
-            let results = NextcloudKit.shared.nkCommonInstance.getInternalType(
-                fileName: metadataSource.fileNameView,
-                mimeType: metadataSource.contentType,
-                directory: false,
-                account: metadataSource.account
-            )
+            let filePath = utilityFileSystem.getDirectoryProviderStorageOcId(metadataSource.ocId,
+                                                                             fileName: metadataSource.fileName,
+                                                                             userId: metadataSource.userId,
+                                                                             urlBase: metadata.urlBase)
+            let results = await NKTypeIdentifiers.shared.getInternalType(fileName: metadataSource.fileNameView, mimeType: metadataSource.contentType, directory: false, account: metadataSource.account)
 
-            metadataSource.size = utilityFileSystem.getFileSize(filePath: filePath)
             metadataSource.contentType = results.mimeType
             metadataSource.iconName = results.iconName
             metadataSource.classFile = results.classFile
+            metadataSource.typeIdentifier = results.typeIdentifier
+
+            metadataSource.size = utilityFileSystem.getFileSize(filePath: filePath)
 
             if let date = utilityFileSystem.getFileCreationDate(filePath: filePath) {
                 metadataSource.creationDate = date
@@ -100,7 +100,9 @@ final class NCCameraRoll: CameraRollExtractor {
             }
             metadataSource.isExtractFile = true
 
-            metadatas.append(self.database.addMetadata(metadataSource))
+            if let metadata = self.database.addAndReturnMetadata(metadataSource) {
+                metadatas.append(metadata)
+            }
             return metadatas
         }
 
@@ -110,14 +112,19 @@ final class NCCameraRoll: CameraRollExtractor {
                 modifyMetadataForUpload: true
             )
 
-            let toPath = self.utilityFileSystem.getDirectoryProviderStorageOcId(result.metadata.ocId, fileNameView: result.metadata.fileNameView)
+            let toPath = self.utilityFileSystem.getDirectoryProviderStorageOcId(result.metadata.ocId,
+                                                                                fileName: result.metadata.fileNameView,
+                                                                                userId: result.metadata.userId,
+                                                                                urlBase: result.metadata.urlBase)
             self.utilityFileSystem.moveFile(atPath: result.filePath, toPath: toPath)
             metadatas.append(result.metadata)
 
             let fetchAssets = PHAsset.fetchAssets(withLocalIdentifiers: [metadataSource.assetLocalIdentifier], options: nil)
             if result.metadata.isLivePhoto, let asset = fetchAssets.firstObject,
                let livePhotoMetadata = await createMetadataLivePhoto(metadata: result.metadata, asset: asset) {
-                metadatas.append(self.database.addMetadata(livePhotoMetadata))
+                if let metadata = self.database.addAndReturnMetadata(livePhotoMetadata) {
+                    metadatas.append(metadata)
+                }
             }
         } catch {
             nkLog(error: "Error during extraction: \(error.localizedDescription), of filename: \(metadataSource.fileNameView)")
@@ -131,11 +138,7 @@ final class NCCameraRoll: CameraRollExtractor {
     ///   - metadata: The metadata to extract.
     ///   - modifyMetadataForUpload: Whether to modify the metadata before returning.
     ///   - completion: Completion handler with result or error.
-    func extractImageVideoFromAssetLocalIdentifier(
-        metadata: tableMetadata,
-        modifyMetadataForUpload: Bool,
-        completion: @escaping (Result<ExtractedAsset, Error>) -> Void
-    ) {
+    func extractImageVideoFromAssetLocalIdentifier(metadata: tableMetadata, modifyMetadataForUpload: Bool, completion: @escaping (Result<ExtractedAsset, Error>) -> Void) {
         Task {
             do {
                 let result = try await extractImageVideoFromAssetLocalIdentifier(
@@ -154,12 +157,7 @@ final class NCCameraRoll: CameraRollExtractor {
     ///   - originalMetadata: Metadata describing the asset
     ///   - modifyMetadataForUpload: Whether to update metadata for upload and store it in the database
     /// - Returns: An `ExtractedAsset` containing the updated metadata and path to the extracted file
-    func extractImageVideoFromAssetLocalIdentifier(
-        metadata originalMetadata: tableMetadata,
-        modifyMetadataForUpload: Bool
-    ) async throws -> ExtractedAsset {
-        var metadata = tableMetadata(value: originalMetadata)
-
+    func extractImageVideoFromAssetLocalIdentifier(metadata: tableMetadata, modifyMetadataForUpload: Bool) async throws -> ExtractedAsset {
         // Determine the appropriate chunk size based on the current network connection
         let chunkSize = NCNetworking.shared.networkReachability == .reachableEthernetOrWiFi
             ? NCGlobal.shared.chunkSizeMBEthernetOrWiFi
@@ -170,24 +168,17 @@ final class NCCameraRoll: CameraRollExtractor {
             withLocalIdentifiers: [metadata.assetLocalIdentifier],
             options: nil
         ).firstObject else {
-            throw NSError(domain: "ExtractAssetError",
-                          code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Asset not found"]
-            )
+            throw NSError(domain: "ExtractAssetError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Asset not found"])
         }
 
         // Determine file extension and prepare filename
         let ext = (asset.originalFilename as NSString).pathExtension.lowercased()
-        let fileName = metadataUpdatedFilename(
-            for: asset,
-            original: metadata.fileNameView,
-            ext: ext,
-            native: metadata.nativeFormat
-        )
+        let fileName = metadataUpdatedFilename(for: asset, original: metadata.fileNameView, ext: ext, native: metadata.nativeFormat)
         let filePath = NSTemporaryDirectory() + fileName
 
         metadata.fileName = fileName
         metadata.fileNameView = fileName
+        metadata.serverUrlFileName = utilityFileSystem.createServerUrl(serverUrl: metadata.serverUrl, fileName: metadata.fileName)
 
         // Safely set the content type if available
         if let type = contentType(for: asset, ext: ext) {
@@ -197,22 +188,11 @@ final class NCCameraRoll: CameraRollExtractor {
         // Extract file data from asset
         switch asset.mediaType {
         case .image:
-            try await extractImage(
-                asset: asset,
-                ext: ext,
-                filePath: filePath,
-                compatibilityFormat: !metadata.nativeFormat
-            )
+            try await extractImage(asset: asset, ext: ext, filePath: filePath, compatibilityFormat: !metadata.nativeFormat)
         case .video:
-            try await extractVideo(
-                asset: asset,
-                filePath: filePath
-            )
+            try await extractVideo( asset: asset, filePath: filePath)
         default:
-            throw NSError(domain: "ExtractAssetError",
-                          code: 7,
-                          userInfo: [NSLocalizedDescriptionKey: "Unsupported media type"]
-            )
+            throw NSError(domain: "ExtractAssetError", code: 7, userInfo: [NSLocalizedDescriptionKey: "Unsupported media type"])
         }
 
         // Populate metadata with extracted file info
@@ -222,10 +202,14 @@ final class NCCameraRoll: CameraRollExtractor {
 
         // Optionally update metadata for upload and persist it
         if modifyMetadataForUpload {
-            updateMetadataForUpload(&metadata, size: Int(metadata.size), chunkSize: chunkSize)
+            if let metadata = await updateMetadataForUploadAsync(metadata: metadata, size: Int(metadata.size), chunkSize: chunkSize) {
+                return ExtractedAsset(metadata: metadata, filePath: filePath)
+            } else {
+                throw NSError(domain: "ExtractAssetError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Asset not found"])
+            }
+        } else {
+            return ExtractedAsset(metadata: metadata, filePath: filePath)
         }
-
-        return ExtractedAsset(metadata: metadata, filePath: filePath)
     }
 
     private func metadataUpdatedFilename(for asset: PHAsset, original: String, ext: String, native: Bool) -> String {
@@ -242,33 +226,39 @@ final class NCCameraRoll: CameraRollExtractor {
         return nil
     }
 
-    private func updateMetadataForUpload(_ metadata: inout tableMetadata, size: Int, chunkSize: Int) {
+    private func updateMetadataForUpload(metadata: tableMetadata, size: Int, chunkSize: Int) -> tableMetadata? {
         metadata.chunk = size > chunkSize ? chunkSize : 0
         metadata.e2eEncrypted = metadata.isDirectoryE2EE
         if metadata.chunk > 0 || metadata.e2eEncrypted {
             metadata.session = NCNetworking.shared.sessionUpload
         }
         metadata.isExtractFile = true
-        metadata = self.database.addMetadata(metadata)
+        return self.database.addAndReturnMetadata(metadata)
+    }
+
+    private func updateMetadataForUploadAsync(metadata: tableMetadata, size: Int, chunkSize: Int) async -> tableMetadata? {
+        metadata.chunk = size > chunkSize ? chunkSize : 0
+        metadata.e2eEncrypted = metadata.isDirectoryE2EE
+        if metadata.chunk > 0 || metadata.e2eEncrypted {
+            metadata.session = NCNetworking.shared.sessionUpload
+        }
+        metadata.isExtractFile = true
+        return await self.database.addAndReturnMetadataAsync(metadata)
     }
 
     private func extractImage(asset: PHAsset, ext: String, filePath: String, compatibilityFormat: Bool) async throws {
         let imageData: Data? = try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.main.async {
-                let options = PHImageRequestOptions()
-                options.isNetworkAccessAllowed = true
-                options.deliveryMode = compatibilityFormat ? .opportunistic : .highQualityFormat
-                options.isSynchronous = true
-                if ext == "dng" { options.version = .original }
+            let options = PHImageRequestOptions()
+            options.isNetworkAccessAllowed = true
+            options.deliveryMode = compatibilityFormat ? .opportunistic : .highQualityFormat
+            options.isSynchronous = true
+            if ext == "dng" { options.version = .original }
 
-                PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
-                    if let data = data {
-                        continuation.resume(returning: data)
-                    } else {
-                        continuation.resume(throwing: NSError(domain: "ExtractAssetError",
-                                                              code: 2,
-                                                              userInfo: [NSLocalizedDescriptionKey: "Image data is nil"]))
-                    }
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+                if let data {
+                    continuation.resume(returning: data)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "ExtractAssetError", code: 2, userInfo: [NSLocalizedDescriptionKey: "Image data is nil"]))
                 }
             }
         }
@@ -280,9 +270,7 @@ final class NCCameraRoll: CameraRollExtractor {
                   let colorSpace = ciImage.colorSpace,
                   let jpegData = CIContext().jpegRepresentation(of: ciImage, colorSpace: colorSpace)
             else {
-                throw NSError(domain: "ExtractAssetError",
-                              code: 3,
-                              userInfo: [NSLocalizedDescriptionKey: "JPEG conversion failed"])
+                throw NSError(domain: "ExtractAssetError", code: 3, userInfo: [NSLocalizedDescriptionKey: "JPEG conversion failed"])
             }
             data = jpegData
         }
@@ -302,9 +290,7 @@ final class NCCameraRoll: CameraRollExtractor {
                     if let asset = asset {
                         continuation.resume(returning: asset)
                     } else {
-                        continuation.resume(throwing: NSError(domain: "ExtractAssetError",
-                                                              code: 4,
-                                                              userInfo: [NSLocalizedDescriptionKey: "Video asset is nil"]))
+                        continuation.resume(throwing: NSError(domain: "ExtractAssetError", code: 4, userInfo: [NSLocalizedDescriptionKey: "Video asset is nil"]))
                     }
                 }
             }
@@ -326,16 +312,12 @@ final class NCCameraRoll: CameraRollExtractor {
                     if exporter.status == .completed {
                         continuation.resume()
                     } else {
-                        continuation.resume(throwing: NSError(domain: "ExtractAssetError",
-                                                              code: 5,
-                                                              userInfo: [NSLocalizedDescriptionKey: "Video export failed"]))
+                        continuation.resume(throwing: NSError(domain: "ExtractAssetError", code: 5, userInfo: [NSLocalizedDescriptionKey: "Video export failed"]))
                     }
                 }
             }
         } else {
-            throw NSError(domain: "ExtractAssetError",
-                          code: 6,
-                          userInfo: [NSLocalizedDescriptionKey: "Unsupported video format"])
+            throw NSError(domain: "ExtractAssetError", code: 6, userInfo: [NSLocalizedDescriptionKey: "Unsupported video format"])
         }
     }
 
@@ -343,12 +325,16 @@ final class NCCameraRoll: CameraRollExtractor {
     /// This method is compatible with Swift 6, avoids non-Sendable captures,
     /// and performs safe background processing.
     private func createMetadataLivePhoto(metadata: tableMetadata, asset: PHAsset?) async -> tableMetadata? {
-        guard let asset else { return nil }
-
+        guard let asset else {
+            return nil
+        }
+        let session = NCSession.shared.getSession(account: metadata.account)
         let options = PHLivePhotoRequestOptions()
         let ocId = UUID().uuidString
         let fileName = (metadata.fileName as NSString).deletingPathExtension + ".mov"
-        let fileNamePath = utilityFileSystem.getDirectoryProviderStorageOcId(ocId, fileNameView: fileName)
+        let fileNamePath = utilityFileSystem.getDirectoryProviderStorageOcId(ocId, fileName: fileName,
+                                                                             userId: metadata.userId,
+                                                                             urlBase: metadata.urlBase)
         let chunkSize = NCNetworking.shared.networkReachability == .reachableEthernetOrWiFi
             ? NCGlobal.shared.chunkSizeMBEthernetOrWiFi
             : NCGlobal.shared.chunkSizeMBCellular
@@ -384,45 +370,33 @@ final class NCCameraRoll: CameraRollExtractor {
 
         // Write video resource to file and create metadata
         return await withCheckedContinuation { (continuation: CheckedContinuation<tableMetadata?, Never>) in
-            PHAssetResourceManager.default().writeData(
-                for: resource,
-                toFile: URL(fileURLWithPath: fileNamePath),
-                options: nil
-            ) { error in
+            PHAssetResourceManager.default().writeData(for: resource, toFile: URL(fileURLWithPath: fileNamePath), options: nil ) { error in
                 guard error == nil else {
                     continuation.resume(returning: nil)
                     return
                 }
+                NCManageDatabase.shared.createMetadata(fileName: fileName,
+                                             ocId: ocId,
+                                             serverUrl: metadata.serverUrl,
+                                             session: session,
+                                             sceneIdentifier: metadata.sceneIdentifier) { metadataLivePhoto in
+                    metadataLivePhoto.livePhotoFile = metadata.fileName
+                    metadataLivePhoto.isExtractFile = true
+                    metadataLivePhoto.session = metadata.session
+                    metadataLivePhoto.sessionSelector = metadata.sessionSelector
+                    metadataLivePhoto.size = self.utilityFileSystem.getFileSize(filePath: fileNamePath)
+                    metadataLivePhoto.status = metadata.status
+                    metadataLivePhoto.chunk = metadataLivePhoto.size > chunkSize ? chunkSize : 0
+                    metadataLivePhoto.e2eEncrypted = metadata.isDirectoryE2EE
+                    if metadataLivePhoto.chunk > 0 || metadataLivePhoto.e2eEncrypted {
+                        metadataLivePhoto.session = NCNetworking.shared.sessionUpload
+                    }
+                    metadataLivePhoto.creationDate = metadata.creationDate
+                    metadataLivePhoto.date = metadata.date
+                    metadataLivePhoto.uploadDate = metadata.uploadDate
 
-                let session = NCSession.shared.getSession(account: metadata.account)
-                let metadataLivePhoto = self.database.createMetadata(
-                    fileName: fileName,
-                    fileNameView: fileName,
-                    ocId: ocId,
-                    serverUrl: metadata.serverUrl,
-                    url: "",
-                    contentType: "",
-                    session: session,
-                    sceneIdentifier: metadata.sceneIdentifier
-                )
-
-                metadataLivePhoto.livePhotoFile = metadata.fileName
-                metadataLivePhoto.classFile = NKCommon.TypeClassFile.video.rawValue
-                metadataLivePhoto.isExtractFile = true
-                metadataLivePhoto.session = metadata.session
-                metadataLivePhoto.sessionSelector = metadata.sessionSelector
-                metadataLivePhoto.size = self.utilityFileSystem.getFileSize(filePath: fileNamePath)
-                metadataLivePhoto.status = metadata.status
-                metadataLivePhoto.chunk = metadataLivePhoto.size > chunkSize ? chunkSize : 0
-                metadataLivePhoto.e2eEncrypted = metadata.isDirectoryE2EE
-                if metadataLivePhoto.chunk > 0 || metadataLivePhoto.e2eEncrypted {
-                    metadataLivePhoto.session = NCNetworking.shared.sessionUpload
+                    continuation.resume(returning: metadataLivePhoto)
                 }
-                metadataLivePhoto.creationDate = metadata.creationDate
-                metadataLivePhoto.date = metadata.date
-                metadataLivePhoto.uploadDate = metadata.uploadDate
-
-                continuation.resume(returning: metadataLivePhoto)
             }
         }
     }

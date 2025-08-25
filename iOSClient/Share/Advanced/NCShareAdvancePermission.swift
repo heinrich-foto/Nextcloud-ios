@@ -132,7 +132,7 @@ class NCShareAdvancePermission: UITableViewController, NCShareAdvanceFotterDeleg
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         if section == 0 {
             // check reshare permission, if restricted add note
-            let maxPermission = metadata.directory ? NCPermissions().permissionMaxFolderShare : NCPermissions().permissionMaxFileShare
+            let maxPermission = metadata.directory ? NCSharePermissions.permissionMaxFolderShare : NCSharePermissions.permissionMaxFileShare
             return shareConfig.sharePermission != maxPermission ? shareConfig.permissions.count + 1 : shareConfig.permissions.count
         } else if section == 1 {
             return shareConfig.advanced.count
@@ -236,23 +236,22 @@ class NCShareAdvancePermission: UITableViewController, NCShareAdvanceFotterDeleg
         }
 
         Task {
-            if (share.shareType == NCShareCommon().SHARE_TYPE_LINK || share.shareType == NCShareCommon().SHARE_TYPE_EMAIL) && NCPermissions().isPermissionToCanShare(share.permissions) {
-                share.permissions = share.permissions - NCPermissions().permissionShareShare
+            if (share.shareType == NCShareCommon.shareTypeLink || share.shareType == NCShareCommon.shareTypeEmail) && NCSharePermissions.hasPermissionToShare(share.permissions) {
+                share.permissions = share.permissions - NCSharePermissions.permissionReshareShare
             }
 
             if isNewShare {
-                let serverUrl = metadata.serverUrl + "/" + metadata.fileName
-                let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: metadata.account)
+                let capabilities = await NKCapabilities.shared.getCapabilities(for: metadata.account)
 
-                if share.shareType != NCShareCommon().SHARE_TYPE_LINK, metadata.e2eEncrypted,
+                if share.shareType != NCShareCommon.shareTypeLink, metadata.e2eEncrypted,
                    capabilities.e2EEApiVersion == NCGlobal.shared.e2eeVersionV20 {
 
-                    if NCNetworkingE2EE().isInUpload(account: metadata.account, serverUrl: serverUrl) {
+                    if await NCNetworkingE2EE().isInUpload(account: metadata.account, serverUrl: metadata.serverUrlFileName) {
                         let error = NKError(errorCode: NCGlobal.shared.errorE2EEUploadInProgress, errorDescription: NSLocalizedString("_e2e_in_upload_", comment: ""))
                         return NCContentPresenter().showInfo(error: error)
                     }
 
-                    let error = await NCNetworkingE2EE().uploadMetadata(serverUrl: serverUrl, addUserId: share.shareWith, removeUserId: nil, account: metadata.account)
+                    let error = await NCNetworkingE2EE().uploadMetadata(serverUrl: metadata.serverUrlFileName, addUserId: share.shareWith, removeUserId: nil, account: metadata.account)
 
                     if error != .success {
                         return NCContentPresenter().showError(error: error)

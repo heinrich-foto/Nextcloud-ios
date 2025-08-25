@@ -60,11 +60,9 @@ class NCTrash: UIViewController, NCTrashListCellDelegate, NCTrashGridCellDelegat
 
     override func viewDidLoad() {
         super.viewDidLoad()
-
-        tabBarSelect = NCTrashSelectTabBar(controller: tabBarController, delegate: self)
+        navigationController?.setNavigationBarAppearance()
 
         view.backgroundColor = .systemBackground
-        self.navigationController?.navigationBar.prefersLargeTitles = true
 
         collectionView.register(UINib(nibName: "NCTrashListCell", bundle: nil), forCellWithReuseIdentifier: "listCell")
         collectionView.register(UINib(nibName: "NCTrashGridCell", bundle: nil), forCellWithReuseIdentifier: "gridCell")
@@ -81,11 +79,19 @@ class NCTrash: UIViewController, NCTrashListCellDelegate, NCTrashGridCellDelegat
         // Add Refresh Control
         collectionView.refreshControl = refreshControl
         refreshControl.tintColor = NCBrandColor.shared.textColor2
-        refreshControl.addTarget(self, action: #selector(loadListingTrash(_:)), for: .valueChanged)
+        refreshControl.action(for: .valueChanged) { _ in
+            Task {
+                await self.loadListingTrash()
+            }
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+
+        if tabBarSelect == nil {
+            tabBarSelect = NCTrashSelectTabBar(controller: tabBarController, viewController: self, delegate: self)
+        }
 
         navigationController?.setNavigationBarAppearance()
         navigationItem.title = titleCurrentFolder
@@ -99,10 +105,12 @@ class NCTrash: UIViewController, NCTrashListCellDelegate, NCTrashGridCellDelegat
         }
 
         isEditMode = false
-        (self.navigationController as? NCMainNavigationController)?.setNavigationRightItems()
 
-        reloadDataSource()
-        loadListingTrash(nil)
+        Task {
+            await (self.navigationController as? NCMainNavigationController)?.setNavigationRightItems()
+            await self.reloadDataSource()
+            await loadListingTrash()
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -113,17 +121,13 @@ class NCTrash: UIViewController, NCTrashListCellDelegate, NCTrashGridCellDelegat
         dataSourceTask?.cancel()
     }
 
-    override func viewWillLayoutSubviews() {
-        super.viewWillLayoutSubviews()
-
-        tabBarSelect?.setFrame()
-    }
-
     // MARK: TAP EVENT
 
-    func tapRestoreListItem(with ocId: String, image: UIImage?, sender: Any) {
+    func tapRestoreListItem(with id: String, image: UIImage?, sender: Any) {
         if !isEditMode {
-            restoreItem(with: ocId)
+            Task {
+                await restoreItem(with: id)
+            }
         } else if let button = sender as? UIView {
             let buttonPosition = button.convert(CGPoint.zero, to: collectionView)
             let indexPath = collectionView.indexPathForItem(at: buttonPosition)
@@ -157,31 +161,28 @@ class NCTrash: UIViewController, NCTrashListCellDelegate, NCTrashGridCellDelegat
 
     // MARK: - DataSource
 
-    func reloadDataSource(withQueryDB: Bool = true) {
-        Task {
-            // Await async DB call off the main thread
-            let results = await self.database.getTableTrashAsync(filePath: getFilePath(), account: session.account)
+    func reloadDataSource(withQueryDB: Bool = true) async {
+        let results = await self.database.getTableTrashAsync(filePath: getFilePath(), account: session.account)
 
-            // Switch back to main thread for UI updates
-            await MainActor.run {
-                self.datasource = results
-                self.collectionView.reloadData()
-                (self.navigationController as? NCMainNavigationController)?.updateRightMenu()
+        await (self.navigationController as? NCMainNavigationController)?.updateRightMenu()
 
-                guard let blinkFileId = self.blinkFileId else { return }
+        await MainActor.run {
+            self.datasource = results
+            self.collectionView.reloadData()
 
-                for itemIx in 0..<results.count where results[itemIx].fileId.contains(blinkFileId) {
-                    let indexPath = IndexPath(item: itemIx, section: 0)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        UIView.animate(withDuration: 0.3) {
-                            self.collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: false)
-                        } completion: { _ in
-                            guard let cell = self.collectionView.cellForItem(at: indexPath) else { return }
-                            cell.backgroundColor = .darkGray
-                            UIView.animate(withDuration: 2) {
-                                cell.backgroundColor = .clear
-                                self.blinkFileId = nil
-                            }
+            guard let blinkFileId = self.blinkFileId else { return }
+
+            for itemIx in 0..<results.count where results[itemIx].fileId.contains(blinkFileId) {
+                let indexPath = IndexPath(item: itemIx, section: 0)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    UIView.animate(withDuration: 0.3) {
+                        self.collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: false)
+                    } completion: { _ in
+                        guard let cell = self.collectionView.cellForItem(at: indexPath) else { return }
+                        cell.backgroundColor = .darkGray
+                        UIView.animate(withDuration: 2) {
+                            cell.backgroundColor = .clear
+                            self.blinkFileId = nil
                         }
                     }
                 }

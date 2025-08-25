@@ -1,25 +1,6 @@
-//
-//  NCCollectionViewCommonSelectionTabBar.swift
-//  Nextcloud
-//
-//  Created by Milen on 01.02.24.
-//  Copyright © 2024 Marino Faggiana. All rights reserved.
-//
-//  Author Marino Faggiana <marino.faggiana@nextcloud.com>
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU General Public License for more details.
-//
-//  You should have received a copy of the GNU General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-//
+// SPDX-FileCopyrightText: Nextcloud GmbH
+// SPDX-FileCopyrightText: 2024 Marino Faggiana
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 import Foundation
 import UIKit
@@ -52,40 +33,40 @@ class NCCollectionViewCommonSelectTabBar: ObservableObject {
     @Published var canConvertLivePhoto = false
     @Published var metadatas: [tableMetadata] = []
 
-    init(controller: NCMainTabBarController? = nil, delegate: NCCollectionViewCommonSelectTabBarDelegate? = nil) {
+    init(controller: NCMainTabBarController? = nil, viewController: UIViewController, delegate: NCCollectionViewCommonSelectTabBarDelegate? = nil) {
+        guard let controller else {
+            return
+        }
         let rootView = NCCollectionViewCommonSelectTabBarView(tabBarSelect: self)
+        let bottomAreaInsets: CGFloat = controller.tabBar.safeAreaInsets.bottom == 0 ? 34 : 0
+        let height = controller.tabBar.frame.height + bottomAreaInsets
         hostingController = UIHostingController(rootView: rootView)
+        guard let hostingController else {
+            return
+        }
 
         self.controller = controller
         self.delegate = delegate
 
-        guard let controller, let hostingController else { return }
-
-        setFrame()
-
-        hostingController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
         hostingController.view.backgroundColor = .clear
         hostingController.view.isHidden = true
 
-        controller.view.addSubview(hostingController.view)
-    }
+        viewController.view.addSubview(hostingController.view)
 
-    func setFrame() {
-        guard let controller,
-              let hostingController
-        else {
-            return
-        }
-        let bottomAreaInsets: CGFloat = controller.tabBar.safeAreaInsets.bottom == 0 ? 34 : 0
-
-        hostingController.view.frame = CGRect(x: controller.tabBar.frame.origin.x,
-                                              y: controller.tabBar.frame.origin.y - bottomAreaInsets,
-                                              width: controller.tabBar.frame.width,
-                                              height: controller.tabBar.frame.height + bottomAreaInsets)
+        NSLayoutConstraint.activate([
+            hostingController.view.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
+            hostingController.view.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
+            hostingController.view.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
+            hostingController.view.heightAnchor.constraint(equalToConstant: height)
+        ])
     }
 
     func show() {
-        guard let controller, let hostingController else { return }
+        guard let controller,
+              let hostingController else {
+            return
+        }
 
         controller.hide()
 
@@ -99,15 +80,13 @@ class NCCollectionViewCommonSelectTabBar: ObservableObject {
     }
 
     func hide() {
-        guard let controller, let hostingController else { return }
+        guard let controller,
+              let hostingController else {
+            return
+        }
 
         hostingController.view.isHidden = true
         controller.show()
-    }
-
-    func isHidden() -> Bool {
-        guard let hostingController else { return false }
-        return hostingController.view.isHidden
     }
 
     func update(fileSelect: [String], metadatas: [tableMetadata]? = nil, userId: String? = nil) {
@@ -144,13 +123,13 @@ class NCCollectionViewCommonSelectTabBar: ObservableObject {
                 if metadata.directory,
                    let directory = NCManageDatabase.shared.getTableDirectory(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@",
                                                                                                     metadata.account,
-                                                                                                    metadata.serverUrl + "/" + metadata.fileName)) {
+                                                                                                    metadata.serverUrlFileName)) {
                     isAnyOffline = directory.offline
                 } else if let localFile = NCManageDatabase.shared.getTableLocalFile(predicate: NSPredicate(format: "ocId == %@", metadata.ocId)) {
                     isAnyOffline = localFile.offline
                 } // else: file is not offline, continue
             }
-            let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: controller?.account ?? "")
+            let capabilities = NCNetworking.shared.capabilities[controller?.account ?? ""] ?? NKCapabilities.Capabilities()
             enableLock = !isAnyDirectory && canUnlock && !capabilities.filesLockVersion.isEmpty
             // Convert Live Photo
             if metadatas.count == 2,
@@ -158,7 +137,7 @@ class NCCollectionViewCommonSelectTabBar: ObservableObject {
                !metadataFirst.isLivePhoto,
                let metadataLast = metadatas.last,
                !metadataLast.isLivePhoto,
-               ((metadataFirst.isVideo && metadataLast.isImage) || (metadataFirst.isImage && metadataLast.isVideo)) {
+               (metadataFirst.isVideo && metadataLast.isImage) || (metadataFirst.isImage && metadataLast.isVideo) {
                 canConvertLivePhoto = true
             }
         }
@@ -259,5 +238,5 @@ struct NCCollectionViewCommonSelectTabBarView: View {
 }
 
 #Preview {
-    NCCollectionViewCommonSelectTabBarView(tabBarSelect: NCCollectionViewCommonSelectTabBar())
+    NCCollectionViewCommonSelectTabBarView(tabBarSelect: NCCollectionViewCommonSelectTabBar(controller: nil, viewController: UIViewController(), delegate: nil))
 }

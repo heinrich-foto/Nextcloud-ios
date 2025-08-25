@@ -43,65 +43,87 @@ class NCGroupfolders: NCCollectionViewCommon {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
 
-        reloadDataSource()
+        Task {
+            await reloadDataSource()
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
 
-        getServerData()
+        Task {
+            await getServerData()
+        }
     }
 
     // MARK: - DataSource
 
-    override func reloadDataSource() {
+    override func reloadDataSource() async {
+        var metadatas: [tableMetadata] = []
+
         if self.serverUrl.isEmpty {
-            let metadatas = database.getResultsMetadatasFromGroupfolders(session: session, layoutForView: layoutForView)
-            self.dataSource = NCCollectionViewDataSource(metadatas: metadatas, layoutForView: layoutForView, account: session.account)
-            self.dataSource.caching(metadatas: metadatas) {
-                super.reloadDataSource()
-            }
+            metadatas = await database.getMetadatasFromGroupfoldersAsync(session: session,
+                                                                         layoutForView: layoutForView)
         } else {
-            database.getMetadatas(predicate: defaultPredicate,
-                                  layoutForView: layoutForView,
-                                  account: session.account) { metadatas, layoutForView, account in
-                self.dataSource = NCCollectionViewDataSource(metadatas: metadatas, layoutForView: layoutForView, account: account)
-                self.dataSource.caching(metadatas: metadatas) {
-                    super.reloadDataSource()
-                }
-            }
+            metadatas = await database.getMetadatasAsync(predicate: defaultPredicate,
+                                                         withLayout: layoutForView,
+                                                         withAccount: session.account)
         }
+
+        self.dataSource = NCCollectionViewDataSource(metadatas: metadatas,
+                                                     layoutForView: layoutForView,
+                                                     account: session.account)
+        await super.reloadDataSource()
+
+        cachingAsync(metadatas: metadatas)
     }
 
-    override func getServerData() {
-        let homeServerUrl = utilityFileSystem.getHomeServer(session: session)
-        let showHiddenFiles = NCKeychain().getShowHiddenFiles(account: session.account)
+    override func getServerData(forced: Bool = false) async {
+        await super.getServerData()
 
-        NextcloudKit.shared.getGroupfolders(account: session.account) { task in
+        defer {
+            restoreDefaultTitle()
+        }
+
+        showLoadingTitle()
+
+        let homeServerUrl = utilityFileSystem.getHomeServer(session: session)
+        let showHiddenFiles = NCPreferences().getShowHiddenFiles(account: session.account)
+
+        let resultsGroupfolders = await NextcloudKit.shared.getGroupfoldersAsync(account: session.account) { task in
             self.dataSourceTask = task
             if self.dataSource.isEmpty() {
                 self.collectionView.reloadData()
             }
-        } completion: { account, results, _, error in
-            if error == .success, let groupfolders = results {
-                self.database.addGroupfolders(account: account, groupfolders: groupfolders)
-                Task {
-                    for groupfolder in groupfolders {
-                        let mountPoint = groupfolder.mountPoint.hasPrefix("/") ? groupfolder.mountPoint : "/" + groupfolder.mountPoint
-                        let serverUrlFileName = homeServerUrl + mountPoint
-                        let results = await NextcloudKit.shared.readFileOrFolderAsync(serverUrlFileName: serverUrlFileName, depth: "0", showHiddenFiles: showHiddenFiles, account: account)
+        }
 
-                        if results.error == .success, let file = results.files?.first {
-                            let isDirectoryE2EE = self.utilityFileSystem.isDirectoryE2EE(file: file)
-                            let metadata = self.database.convertFileToMetadata(file, isDirectoryE2EE: isDirectoryE2EE)
-                            self.database.addMetadata(metadata)
-                            self.database.addDirectory(e2eEncrypted: isDirectoryE2EE, favorite: metadata.favorite, ocId: metadata.ocId, fileId: metadata.fileId, permissions: metadata.permissions, serverUrl: serverUrlFileName, account: metadata.account)
-                        }
-                    }
-                    self.reloadDataSource()
-                }
+        guard resultsGroupfolders.error == .success, let groupfolders = resultsGroupfolders.results else {
+            return
+        }
+
+        await self.database.addGroupfoldersAsync(account: session.account, groupfolders: groupfolders)
+
+        for groupfolder in groupfolders {
+            let mountPoint = groupfolder.mountPoint.hasPrefix("/") ? groupfolder.mountPoint : "/" + groupfolder.mountPoint
+            let serverUrlFileName = homeServerUrl + mountPoint
+            let resultsReadFile = await NextcloudKit.shared.readFileOrFolderAsync(serverUrlFileName: serverUrlFileName,
+                                                                                  depth: "0", showHiddenFiles: showHiddenFiles,
+                                                                                  account: session.account)
+
+            guard resultsReadFile.error == .success, let file = resultsReadFile.files?.first else {
+                return
             }
-            self.refreshControlEndRefreshing()
+
+            let metadata = await self.database.convertFileToMetadataAsync(file)
+
+            await self.database.addMetadataAsync(metadata)
+            await self.database.addDirectoryAsync(serverUrl: serverUrlFileName,
+                                                  ocId: metadata.ocId,
+                                                  fileId: metadata.fileId,
+                                                  permissions: metadata.permissions,
+                                                  favorite: metadata.favorite,
+                                                  account: metadata.account)
+            await self.reloadDataSource()
         }
     }
 }

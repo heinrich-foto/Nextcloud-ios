@@ -39,7 +39,7 @@ class NCMenuAction {
     var selected: Bool = false
     var isOn: Bool = false
     var action: ((_ menuAction: NCMenuAction) -> Void)?
-    var rowHeight: CGFloat { self.title == NCMenuAction.seperatorIdentifier ? NCMenuAction.seperatorHeight : self.details != nil ? 76 : 56 }
+    var rowHeight: CGFloat { self.title == NCMenuAction.seperatorIdentifier ? NCMenuAction.seperatorHeight : self.details != nil ? 76 : 60 }
     var order: Int = 0
     var sender: Any?
 
@@ -105,14 +105,13 @@ extension NCMenuAction {
         )
     }
 
-    /// Delete files either from cache or from Nextcloud
-    static func deleteAction(selectedMetadatas: [tableMetadata], metadataFolder: tableMetadata? = nil, controller: NCMainTabBarController?, order: Int = 0, sender: Any?, completion: (() -> Void)? = nil) -> NCMenuAction {
+    /// Delete files either from cache or from Nextcloud, or unshare (depending on context)
+    static func deleteOrUnshareAction(selectedMetadatas: [tableMetadata], metadataFolder: tableMetadata? = nil, controller: NCMainTabBarController?, order: Int = 0, sender: Any?, completion: (() -> Void)? = nil) -> NCMenuAction {
         var titleDelete = NSLocalizedString("_delete_", comment: "")
         var message = NSLocalizedString("_want_delete_", comment: "")
         var icon = "trash"
         var destructive = false
         var color = NCBrandColor.shared.iconImageColor
-        let permissions = NCPermissions()
 
         if selectedMetadatas.count > 1 {
             titleDelete = NSLocalizedString("_delete_selected_files_", comment: "")
@@ -131,8 +130,8 @@ extension NCMenuAction {
             }
 
             if let metadataFolder = metadataFolder {
-                let isShare = metadata.permissions.contains(permissions.permissionShared) && !metadataFolder.permissions.contains(permissions.permissionShared)
-                let isMounted = metadata.permissions.contains(permissions.permissionMounted) && !metadataFolder.permissions.contains(permissions.permissionMounted)
+                let isShare = metadata.permissions.contains(NCMetadataPermissions.permissionShared) && !metadataFolder.permissions.contains(NCMetadataPermissions.permissionShared)
+                let isMounted = metadata.permissions.contains(NCMetadataPermissions.permissionMounted) && !metadataFolder.permissions.contains(NCMetadataPermissions.permissionMounted)
                 if isShare || isMounted {
                     titleDelete = NSLocalizedString("_leave_share_", comment: "")
                     icon = "person.2.slash"
@@ -191,14 +190,24 @@ extension NCMenuAction {
                         message: NSLocalizedString("_select_offline_warning_", comment: ""),
                         preferredStyle: .alert)
                     alert.addAction(UIAlertAction(title: NSLocalizedString("_continue_", comment: ""), style: .default, handler: { _ in
-                        selectedMetadatas.forEach { NCDownloadAction.shared.setMetadataAvalableOffline($0, isOffline: isAnyOffline) }
-                        completion?()
+                        Task {
+                            for metadata in selectedMetadatas {
+                                await NCDownloadAction.shared.setMetadataAvalableOffline(metadata, isOffline: isAnyOffline)
+
+                            }
+                            completion?()
+                        }
                     }))
                     alert.addAction(UIAlertAction(title: NSLocalizedString("_cancel_", comment: ""), style: .cancel))
                     viewController.present(alert, animated: true)
                 } else {
-                    selectedMetadatas.forEach { NCDownloadAction.shared.setMetadataAvalableOffline($0, isOffline: isAnyOffline) }
-                    completion?()
+                    Task {
+                        for metadata in selectedMetadatas {
+                            await NCDownloadAction.shared.setMetadataAvalableOffline(metadata, isOffline: isAnyOffline)
+
+                        }
+                        completion?()
+                    }
                 }
             }
         )
@@ -211,24 +220,27 @@ extension NCMenuAction {
             order: order,
             sender: sender,
             action: { _ in
-                var fileNameError: NKError?
-                let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: account)
+                Task { @MainActor in
+                    var fileNameError: NKError?
+                    let capabilities = await NKCapabilities.shared.getCapabilities(for: account)
 
-                for metadata in selectedMetadatas {
-                    if let sceneIdentifier = metadata.sceneIdentifier,
-                       let controller = SceneManager.shared.getController(sceneIdentifier: sceneIdentifier),
-                       let checkError = FileNameValidator.checkFileName(metadata.fileNameView, account: controller.account, capabilities: capabilities) {
+                    for metadata in selectedMetadatas {
+                        if let sceneIdentifier = metadata.sceneIdentifier,
+                           let controller = SceneManager.shared.getController(sceneIdentifier: sceneIdentifier),
+                           let checkError = FileNameValidator.checkFileName(metadata.fileNameView, account: controller.account, capabilities: capabilities) {
 
-                        fileNameError = checkError
-                        break
+                            fileNameError = checkError
+                            break
+                        }
                     }
-                }
 
-                if let fileNameError {
-                    viewController.present(UIAlertController.warning(message: "\(fileNameError.errorDescription) \(NSLocalizedString("_please_rename_file_", comment: ""))"), animated: true, completion: nil)
-                } else {
-                    let controller = viewController.tabBarController as? NCMainTabBarController
-                    NCDownloadAction.shared.openSelectView(items: selectedMetadatas, controller: controller)
+                    if let fileNameError {
+                        let message = "\(fileNameError.errorDescription) \(NSLocalizedString("_please_rename_file_", comment: ""))"
+                        await UIAlertController.warningAsync( message: message, presenter: viewController)
+                    } else {
+                        let controller = viewController.tabBarController as? NCMainTabBarController
+                        NCDownloadAction.shared.openSelectView(items: selectedMetadatas, controller: controller)
+                    }
                     completion?()
                 }
             }

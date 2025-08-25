@@ -1,25 +1,6 @@
-//
-//  NCCollectionViewCommon.swift
-//  Nextcloud
-//
-//  Created by Marino Faggiana on 12/09/2020.
-//  Copyright © 2020 Marino Faggiana. All rights reserved.
-//
-//  Author Marino Faggiana <marino.faggiana@nextcloud.com>
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU General Public License for more details.
-//
-//  You should have received a copy of the GNU General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-//
+// SPDX-FileCopyrightText: Nextcloud GmbH
+// SPDX-FileCopyrightText: 2020 Marino Faggiana
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 import UIKit
 import SwiftUI
@@ -37,7 +18,7 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     let utilityFileSystem = NCUtilityFileSystem()
     let imageCache = NCImageCache.shared
     var dataSource = NCCollectionViewDataSource()
-    let netwoking = NCNetworking.shared
+    let networking = NCNetworking.shared
     let appDelegate = (UIApplication.shared.delegate as? AppDelegate)!
     var pinchGesture: UIPinchGestureRecognizer = UIPinchGestureRecognizer()
 
@@ -48,7 +29,7 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     var backgroundImageView = UIImageView()
     var serverUrl: String = ""
     var isEditMode = false
-    var isDirectoryEncrypted = false
+    var isDirectoryE2EE = false
     var fileSelect: [String] = []
     var metadataFolder: tableMetadata?
     var richWorkspaceText: String?
@@ -117,12 +98,12 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     }
 
     var showDescription: Bool {
-        !headerRichWorkspaceDisable && NCKeychain().showDescription
+        !headerRichWorkspaceDisable && NCPreferences().showDescription
     }
 
     var isRecommendationActived: Bool {
-        self.serverUrl == self.utilityFileSystem.getHomeServer(session: self.session) &&
-        capabilities.recommendations
+        let capabilities = NCNetworking.shared.capabilities[session.account] ?? NKCapabilities.Capabilities()
+        return self.serverUrl == self.utilityFileSystem.getHomeServer(session: self.session) && capabilities.recommendations
     }
 
     var infoLabelsSeparator: String {
@@ -138,12 +119,12 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     }
 
     var defaultPredicate: NSPredicate {
-        let predicate = NSPredicate(format: "account == %@ AND serverUrl == %@ AND NOT (status IN %@) AND NOT (livePhotoFile != '' AND classFile == %@)", session.account, self.serverUrl, self.global.metadataStatusHideInView, NKCommon.TypeClassFile.video.rawValue)
+        let predicate = NSPredicate(format: "account == %@ AND serverUrl == %@ AND fileName != %@ AND NOT (status IN %@) AND NOT (livePhotoFile != '' AND classFile == %@)", session.account, self.serverUrl, NextcloudKit.shared.nkCommonInstance.rootFileName, self.global.metadataStatusHideInView, NKTypeClassFile.video.rawValue)
         return predicate
     }
 
     var personalFilesOnlyPredicate: NSPredicate {
-        let predicate = NSPredicate(format: "account == %@ AND serverUrl == %@ AND (ownerId == %@ || ownerId == '') AND mountType == '' AND NOT (status IN %@) AND NOT (livePhotoFile != '' AND classFile == %@)", session.account, self.serverUrl, session.userId, global.metadataStatusHideInView, NKCommon.TypeClassFile.video.rawValue)
+        let predicate = NSPredicate(format: "account == %@ AND serverUrl == %@ AND fileName != %@ AND (ownerId == %@ || ownerId == '') AND mountType == '' AND NOT (status IN %@) AND NOT (livePhotoFile != '' AND classFile == %@)", session.account, self.serverUrl, NextcloudKit.shared.nkCommonInstance.rootFileName, session.userId, global.metadataStatusHideInView, NKTypeClassFile.video.rawValue)
         return predicate
     }
 
@@ -167,8 +148,9 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
         return pinchGesture.state == .began || pinchGesture.state == .changed
     }
 
-    var capabilities: NCCapabilities.Capabilities {
-        NCCapabilities.shared.getCapabilitiesBlocking(for: session.account)
+    func isRecommendationActived() async -> Bool {
+        let capabilities = await NKCapabilities.shared.getCapabilities(for: session.account)
+        return self.serverUrl == self.utilityFileSystem.getHomeServer(session: self.session) && capabilities.recommendations
     }
 
     internal let debouncer = NCDebouncer(delay: 1)
@@ -178,14 +160,13 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        tabBarSelect = NCCollectionViewCommonSelectTabBar(controller: self.controller, delegate: self)
         self.navigationController?.presentationController?.delegate = self
         collectionView.alwaysBounceVertical = true
         collectionView.accessibilityIdentifier = "NCCollectionViewCommon"
 
         view.backgroundColor = .systemBackground
         collectionView.backgroundColor = .systemBackground
-        refreshControl.tintColor = NCBrandColor.shared.textColor2
+        refreshControl.tintColor = .clear
 
         if enableSearchBar {
             searchController = UISearchController(searchResultsController: nil)
@@ -218,7 +199,17 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
 
         collectionView.refreshControl = refreshControl
         refreshControl.action(for: .valueChanged) { _ in
-            self.getServerData()
+            Task { @MainActor in
+                // Perform async server forced
+                await self.getServerData(forced: true)
+
+                // Stop the refresh control after data is loaded
+                self.refreshControl.endRefreshing()
+
+                // Wait 1.5 seconds before resetting the button alpha
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                self.resetPlusButtonAlpha()
+            }
         }
 
         let longPressedGesture = UILongPressGestureRecognizer(target: self, action: #selector(longPressCollecationView(_:)))
@@ -238,7 +229,16 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
         let dropInteraction = UIDropInteraction(delegate: self)
         self.navigationController?.navigationItem.leftBarButtonItems?.first?.customView?.addInteraction(dropInteraction)
 
-        NotificationCenter.default.addObserver(self, selector: #selector(changeTheming(_:)), name: NSNotification.Name(rawValue: global.notificationCenterChangeTheming), object: nil)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak self] (view: NCCollectionViewCommon, _) in
+            guard let self else { return }
+
+            self.sectionFirstHeader?.setRichWorkspaceColor(style: view.traitCollection.userInterfaceStyle)
+        }
+
+        NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: self.global.notificationCenterChangeTheming), object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.collectionView.reloadData()
+        }
 
         DispatchQueue.main.async {
             self.collectionView?.collectionViewLayout.invalidateLayout()
@@ -253,10 +253,16 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
         }
         navigationItem.title = titleCurrentFolder
 
+        if tabBarSelect == nil {
+            tabBarSelect = NCCollectionViewCommonSelectTabBar(controller: self.controller, viewController: self, delegate: self)
+        }
+
         isEditMode = false
 
-        (self.navigationController as? NCMainNavigationController)?.setNavigationLeftItems()
-        (self.navigationController as? NCMainNavigationController)?.setNavigationRightItems()
+        Task {
+            await (self.navigationController as? NCMainNavigationController)?.setNavigationLeftItems()
+            await (self.navigationController as? NCMainNavigationController)?.setNavigationRightItems()
+        }
 
         layoutForView = database.getLayoutForView(account: session.account, key: layoutKey, serverUrl: serverUrl)
         if isLayoutList {
@@ -279,7 +285,9 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
 
-        self.netwoking.addDelegate(self)
+        Task {
+            await NCNetworking.shared.transferDispatcher.addDelegate(self)
+        }
 
         NotificationCenter.default.addObserver(self, selector: #selector(applicationWillResignActive(_:)), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(closeRichWorkspaceWebView), name: NSNotification.Name(rawValue: global.notificationCenterCloseRichWorkspaceWebView), object: nil)
@@ -288,24 +296,26 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
 
-        self.netwoking.cancelUnifiedSearchFiles()
+        self.networking.cancelUnifiedSearchFiles()
         dismissTip()
 
         // Cancel Queue & Retrieves Properties
-        self.netwoking.downloadThumbnailQueue.cancelAll()
-        self.netwoking.unifiedSearchQueue.cancelAll()
+        self.networking.downloadThumbnailQueue.cancelAll()
+        self.networking.unifiedSearchQueue.cancelAll()
         dataSourceTask?.cancel()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
 
-        self.netwoking.removeDelegate(self)
+        Task {
+            await NCNetworking.shared.transferDispatcher.removeDelegate(self)
+        }
 
         NotificationCenter.default.removeObserver(self, name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: global.notificationCenterCloseRichWorkspaceWebView), object: nil)
 
-        dataSource.removeImageCache()
+        removeImageCache(metadatas: self.dataSource.getMetadatas())
     }
 
     func presentationControllerDidDismiss( _ presentationController: UIPresentationController) {
@@ -333,19 +343,13 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
         return true
     }
 
-    override func viewWillLayoutSubviews() {
-        super.viewWillLayoutSubviews()
-
-        tabBarSelect?.setFrame()
-    }
-
     // MARK: - Transfer Delegate
 
     func transferProgressDidUpdate(progress: Float, totalBytes: Int64, totalBytesExpected: Int64, fileName: String, serverUrl: String) { }
 
     func transferChange(status: String, metadatasError: [tableMetadata: NKError]) {
         switch status {
-        /// DELETE
+        // DELETE
         case self.global.networkingStatusDelete:
             let errorForThisServer = metadatasError.first { entry in
                 let (key, value) = entry
@@ -364,11 +368,13 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
             if self.isSearchingMode {
                 self.networkSearch()
             } else if needLoadDataSource {
-                self.reloadDataSource()
+                Task {
+                    await self.reloadDataSource()
+                }
             } else {
-                if isRecommendationActived {
-                    Task.detached {
-                        await self.netwoking.createRecommendations(session: self.session, serverUrl: self.serverUrl, collectionView: self.collectionView)
+                Task.detached {
+                    if await self.isRecommendationActived() {
+                        await self.networking.createRecommendations(session: self.session, serverUrl: self.serverUrl, collectionView: self.collectionView)
                     }
                 }
             }
@@ -386,51 +392,65 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
 
         DispatchQueue.main.async {
             switch status {
-            /// UPLOADED, UPLOADED LIVEPHOTO
+            // UPLOADED, UPLOADED LIVEPHOTO
             case self.global.networkingStatusUploaded, self.global.networkingStatusUploadedLivePhoto:
                 self.debouncer.call {
                     if self.isSearchingMode {
                         self.networkSearch()
                     } else if self.serverUrl == metadata.serverUrl {
-                        self.reloadDataSource()
+                        Task {
+                            await self.reloadDataSource()
+                        }
                     }
                 }
-            /// DOWNLOAD
+            // DOWNLOAD
             case self.global.networkingStatusDownloading:
-                if metadata.serverUrl == self.serverUrl {
-                    self.reloadDataSource()
+                Task {
+                    if metadata.serverUrl == self.serverUrl {
+                        await self.reloadDataSource()
+                    }
                 }
             case self.global.networkingStatusDownloaded:
-                if metadata.serverUrl == self.serverUrl {
-                    self.reloadDataSource()
+                Task {
+                    if metadata.serverUrl == self.serverUrl {
+                        await self.reloadDataSource()
+                    }
                 }
             case self.global.networkingStatusDownloadCancel:
-                if metadata.serverUrl == self.serverUrl {
-                    self.reloadDataSource()
+                Task {
+                    if metadata.serverUrl == self.serverUrl {
+                        await self.reloadDataSource()
+                    }
                 }
-            /// CREATE FOLDER
+            // CREATE FOLDER
             case self.global.networkingStatusCreateFolder:
                 if metadata.serverUrl == self.serverUrl, metadata.sessionSelector != self.global.selectorUploadAutoUpload {
                     self.pushMetadata(metadata)
                 }
-            /// RENAME
+            // RENAME
             case self.global.networkingStatusRename:
                 self.debouncer.call {
                     if self.isSearchingMode {
                         self.networkSearch()
                     } else if self.serverUrl == metadata.serverUrl {
-                        self.reloadDataSource()
+                        Task {
+                            await self.reloadDataSource()
+                        }
                     }
                 }
-            /// FAVORITE
+            // FAVORITE
             case self.global.networkingStatusFavorite:
                 self.debouncer.call {
                     if self.isSearchingMode {
                         self.networkSearch()
                     } else if self is NCFavorite {
-                        self.reloadDataSource()
+                        Task {
+                            await self.reloadDataSource()
+                        }
                     } else if self.serverUrl == metadata.serverUrl {
-                        self.reloadDataSource()
+                        Task {
+                            await self.reloadDataSource()
+                        }
                     }
                 }
             default:
@@ -451,7 +471,9 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
                 }
                 self.networkSearch()
             } else if ( self.serverUrl == serverUrl) || serverUrl == nil {
-                self.reloadDataSource()
+                Task {
+                    await self.reloadDataSource()
+                }
             }
         }
     }
@@ -461,12 +483,14 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
             if self.isSearchingMode {
                 self.networkSearch()
             } else if ( self.serverUrl == serverUrl) || serverUrl == nil {
-                self.getServerData()
+                Task {
+                    await self.getServerData()
+                }
             }
         }
     }
 
-    func transferCopy(metadata: tableMetadata, error: NKError) {
+    func transferCopy(metadata: tableMetadata, destination: String, error: NKError) {
         if error != .success {
             NCContentPresenter().showError(error: error)
         }
@@ -474,12 +498,15 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
         if isSearchingMode {
             return networkSearch()
         }
-        if metadata.serverUrl == self.serverUrl {
-            reloadDataSource()
+
+        if metadata.serverUrl == self.serverUrl || destination == self.serverUrl {
+            Task {
+                await self.reloadDataSource()
+            }
         }
     }
 
-    func transferMove(metadata: tableMetadata, error: NKError) {
+    func transferMove(metadata: tableMetadata, destination: String, error: NKError) {
         if error != .success {
             NCContentPresenter().showError(error: error)
         }
@@ -487,74 +514,124 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
         if isSearchingMode {
             return networkSearch()
         }
-        if metadata.serverUrl == self.serverUrl {
-            reloadDataSource()
+
+        if metadata.serverUrl == self.serverUrl || destination == self.serverUrl {
+            Task {
+                await self.reloadDataSource()
+            }
         }
     }
 
     // MARK: - NotificationCenter
 
     @objc func applicationWillResignActive(_ notification: NSNotification) {
-        refreshControlEndRefreshing()
-    }
-
-    @objc func changeTheming(_ notification: NSNotification) {
-        self.reloadDataSource()
+        self.resetPlusButtonAlpha()
     }
 
     @objc func closeRichWorkspaceWebView() {
-        reloadDataSource()
+        Task {
+            await self.reloadDataSource()
+        }
     }
 
     // MARK: - Layout
 
     func changeLayout(layoutForView: NCDBLayoutForView) {
-        if self.layoutForView?.layout == layoutForView.layout {
-            self.layoutForView = self.database.setLayoutForView(layoutForView: layoutForView)
-            self.reloadDataSource()
-            return
+        let homeServer = utilityFileSystem.getHomeServer(urlBase: session.urlBase, userId: session.userId)
+        let numFoldersLayoutsForView = self.database.getLayoutsForView(keyStore: layoutForView.keyStore)?.count ?? 1
+
+        func changeLayout(withSubFolders: Bool) {
+            if self.layoutForView?.layout == layoutForView.layout {
+                self.layoutForView = self.database.setLayoutForView(layoutForView: layoutForView, withSubFolders: withSubFolders)
+                Task {
+                    await self.reloadDataSource()
+                }
+                return
+            }
+
+            self.layoutForView = self.database.setLayoutForView(layoutForView: layoutForView, withSubFolders: withSubFolders)
+            layoutForView.layout = layoutForView.layout
+            self.layoutType = layoutForView.layout
+
+            collectionView.reloadData()
+
+            switch layoutForView.layout {
+            case global.layoutList:
+                self.collectionView.setCollectionViewLayout(self.listLayout, animated: true)
+            case global.layoutGrid:
+                self.collectionView.setCollectionViewLayout(self.gridLayout, animated: true)
+            case global.layoutPhotoSquare, global.layoutPhotoRatio:
+                self.collectionView.setCollectionViewLayout(self.mediaLayout, animated: true)
+            default:
+                break
+            }
+
+            self.collectionView.collectionViewLayout.invalidateLayout()
+
+            Task {
+                await (self.navigationController as? NCMainNavigationController)?.updateRightMenu()
+            }
         }
 
-        self.layoutForView = self.database.setLayoutForView(layoutForView: layoutForView)
-        layoutForView.layout = layoutForView.layout
-        self.layoutType = layoutForView.layout
+        if serverUrl == homeServer || numFoldersLayoutsForView == 1 {
+            changeLayout(withSubFolders: false)
+        } else {
+            let alertController = UIAlertController(title: NSLocalizedString("_propagate_layout_", comment: ""), message: nil, preferredStyle: .alert)
 
-        collectionView.reloadData()
+            alertController.addAction(UIAlertAction(title: NSLocalizedString("_yes_", comment: ""), style: .default, handler: { _ in
+                changeLayout(withSubFolders: true)
+            }))
+            alertController.addAction(UIAlertAction(title: NSLocalizedString("_no_", comment: ""), style: .default, handler: { _ in
+                changeLayout(withSubFolders: false)
+            }))
 
-        switch layoutForView.layout {
-        case global.layoutList:
-            self.collectionView.setCollectionViewLayout(self.listLayout, animated: true)
-        case global.layoutGrid:
-            self.collectionView.setCollectionViewLayout(self.gridLayout, animated: true)
-        case global.layoutPhotoSquare, global.layoutPhotoRatio:
-            self.collectionView.setCollectionViewLayout(self.mediaLayout, animated: true)
-        default:
-            break
+            self.present(alertController, animated: true)
         }
-
-        self.collectionView.collectionViewLayout.invalidateLayout()
-
-        (self.navigationController as? NCMainNavigationController)?.updateRightMenu()
     }
 
     func getNavigationTitle() -> String {
-        let tableAccount = self.database.getTableAccount(predicate: NSPredicate(format: "account == %@", session.account))
-        if let tableAccount,
-           !tableAccount.alias.isEmpty {
-            return tableAccount.alias
+        let tblAccount = self.database.getTableAccount(predicate: NSPredicate(format: "account == %@", session.account))
+        if let tblAccount,
+           !tblAccount.alias.isEmpty {
+            return tblAccount.alias
         }
         return NCBrandOptions.shared.brand
     }
 
-    func accountSettingsDidDismiss(tableAccount: tableAccount?, controller: NCMainTabBarController?) { }
+    func accountSettingsDidDismiss(tblAccount: tableAccount?, controller: NCMainTabBarController?) { }
 
     func resetPlusButtonAlpha(animated: Bool = true) { }
 
     func isHiddenPlusButton(_ isHidden: Bool) { }
 
-    func refreshControlEndRefreshing() {
-        refreshControl.endRefreshing()
-        resetPlusButtonAlpha()
+    @MainActor
+    func showLoadingTitle() {
+        // Don't show spinner on iPad root folder
+        if UIDevice.current.userInterfaceIdiom == .pad,
+           (self.serverUrl == self.utilityFileSystem.getHomeServer(session: self.session)) || self.serverUrl.isEmpty {
+            return
+        }
+
+        let spinner = UIActivityIndicatorView(style: .medium)
+        spinner.startAnimating()
+
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(spinner)
+
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+        ])
+
+        self.navigationItem.titleView = container
+    }
+
+    @MainActor
+    func restoreDefaultTitle() {
+        self.navigationItem.titleView = nil
+        self.navigationItem.title = self.titleCurrentFolder
     }
 
     // MARK: - SEARCH
@@ -578,7 +655,9 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
         isSearchingMode = true
         self.providers?.removeAll()
         self.dataSource.removeAll()
-        self.reloadDataSource()
+        Task {
+            await self.reloadDataSource()
+        }
         // TIP
         dismissTip()
         //
@@ -592,13 +671,15 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     }
 
     func searchBarCancelButtonClicked(_ searchBar: UISearchBar) {
-        self.netwoking.cancelUnifiedSearchFiles()
+        self.networking.cancelUnifiedSearchFiles()
 
         self.isSearchingMode = false
         self.literalSearch = ""
         self.providers?.removeAll()
         self.dataSource.removeAll()
-        self.reloadDataSource()
+        Task {
+            await self.reloadDataSource()
+        }
         //
         isHiddenPlusButton(false)
     }
@@ -706,36 +787,35 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     }
 
     @objc func pasteFilesMenu(_ sender: Any?) {
-        NCDownloadAction.shared.pastePasteboard(serverUrl: serverUrl, account: session.account, controller: self.controller)
+        Task {
+            await NCDownloadAction.shared.pastePasteboard(serverUrl: serverUrl, account: session.account, controller: self.controller)
+        }
     }
 
     // MARK: - DataSource
 
-    func reloadDataSource() {
-        if isSearchingMode {
-            isDirectoryEncrypted = false
-        } else {
-            isDirectoryEncrypted = NCUtilityFileSystem().isDirectoryE2EE(session: session, serverUrl: serverUrl)
-            if isRecommendationActived {
-                Task.detached {
-                    await self.netwoking.createRecommendations(session: self.session, serverUrl: self.serverUrl, collectionView: self.collectionView)
+    @MainActor
+    func reloadDataSource() async {
+        if !isSearchingMode {
+            Task.detached {
+                if await self.isRecommendationActived() {
+                    await self.networking.createRecommendations(session: self.session, serverUrl: self.serverUrl, collectionView: self.collectionView)
                 }
             }
         }
 
-        DispatchQueue.main.async {
-            UIView.transition(with: self.collectionView,
-                              duration: 0.20,
-                              options: .transitionCrossDissolve,
-                              animations: { self.collectionView.reloadData() },
-                              completion: nil)
+        UIView.transition(with: self.collectionView,
+                          duration: 0.20,
+                          options: .transitionCrossDissolve,
+                          animations: { self.collectionView.reloadData() },
+                          completion: nil)
 
-            (self.navigationController as? NCMainNavigationController)?.updateRightMenu()
-            self.refreshControlEndRefreshing()
-        }
+        await (self.navigationController as? NCMainNavigationController)?.updateRightMenu()
     }
 
-    func getServerData() {}
+    func getServerData(forced: Bool = false) async {
+        dataSourceTask?.cancel()
+    }
 
     @objc func networkSearch() {
         guard !networkSearchInProgress else {
@@ -744,57 +824,67 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
         guard !session.account.isEmpty,
               let literalSearch = literalSearch,
               !literalSearch.isEmpty else {
-            return self.refreshControlEndRefreshing()
+            return
         }
+        let capabilities = NCNetworking.shared.capabilities[session.account] ?? NKCapabilities.Capabilities()
 
         self.networkSearchInProgress = true
         self.dataSource.removeAll()
-        self.refreshControl.beginRefreshing()
-        self.reloadDataSource()
+        Task {
+            await self.reloadDataSource()
+        }
 
         if capabilities.serverVersionMajor >= global.nextcloudVersion20 {
-            self.netwoking.unifiedSearchFiles(literal: literalSearch, account: session.account) { task in
+            self.networking.unifiedSearchFiles(literal: literalSearch, account: session.account) { task in
                 self.dataSourceTask = task
-                self.reloadDataSource()
+                Task {
+                    await self.reloadDataSource()
+                }
             } providers: { account, searchProviders in
                 self.providers = searchProviders
                 self.searchResults = []
-                self.dataSource = NCCollectionViewDataSource(metadatas: [], layoutForView: self.layoutForView, providers: self.providers, searchResults: self.searchResults, account: account)
+                self.dataSource = NCCollectionViewDataSource(metadatas: [],
+                                                             layoutForView: self.layoutForView,
+                                                             providers: self.providers,
+                                                             searchResults: self.searchResults,
+                                                             account: account)
             } update: { _, _, searchResult, metadatas in
                 guard let metadatas, !metadatas.isEmpty, self.isSearchingMode, let searchResult else { return }
-                self.netwoking.unifiedSearchQueue.addOperation(NCCollectionViewUnifiedSearch(collectionViewCommon: self, metadatas: metadatas, searchResult: searchResult))
+                self.networking.unifiedSearchQueue.addOperation(NCCollectionViewUnifiedSearch(collectionViewCommon: self, metadatas: metadatas, searchResult: searchResult))
             } completion: { _, _ in
-                self.refreshControlEndRefreshing()
-                self.reloadDataSource()
+                Task {
+                    await self.reloadDataSource()
+                }
                 self.networkSearchInProgress = false
             }
         } else {
-            self.netwoking.searchFiles(literal: literalSearch, account: session.account) { task in
+            self.networking.searchFiles(literal: literalSearch, account: session.account) { task in
                 self.dataSourceTask = task
-                self.reloadDataSource()
-            } completion: { metadatasSearch, error in
-                guard let metadatasSearch,
-                        error == .success,
-                        self.isSearchingMode
-                else {
-                    self.networkSearchInProgress = false
-                    DispatchQueue.main.async {
-                        self.refreshControlEndRefreshing()
-                        self.reloadDataSource()
-                    }
-                    return
+                Task {
+                    await self.reloadDataSource()
                 }
-                let ocId = metadatasSearch.map { $0.ocId }
-
-                self.database.getMetadatas(predicate: NSPredicate(format: "ocId IN %@", ocId),
-                                           layoutForView: self.layoutForView,
-                                           account: self.session.account) { metadatas, layoutForView, account  in
-                    self.dataSource = NCCollectionViewDataSource(metadatas: metadatas, layoutForView: layoutForView, providers: self.providers, searchResults: self.searchResults, account: account)
-                    self.networkSearchInProgress = false
-                    self.dataSource.caching(metadatas: metadatas) {
-                        self.refreshControlEndRefreshing()
-                        self.reloadDataSource()
+            } completion: { metadatasSearch, error in
+                Task {
+                    guard let metadatasSearch,
+                            error == .success,
+                            self.isSearchingMode
+                    else {
+                        self.networkSearchInProgress = false
+                        await self.reloadDataSource()
+                        return
                     }
+                    let ocId = metadatasSearch.map { $0.ocId }
+                    let metadatas = await self.database.getMetadatasAsync(predicate: NSPredicate(format: "ocId IN %@", ocId),
+                                                                          withLayout: self.layoutForView,
+                                                                          withAccount: self.session.account)
+
+                    self.dataSource = NCCollectionViewDataSource(metadatas: metadatas,
+                                                                 layoutForView: self.layoutForView,
+                                                                 providers: self.providers,
+                                                                 searchResults: self.searchResults,
+                                                                 account: self.session.account)
+                    self.networkSearchInProgress = false
+                    await self.reloadDataSource()
                 }
             }
         }
@@ -806,9 +896,11 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
         metadataForSection.unifiedSearchInProgress = true
         self.collectionView?.reloadData()
 
-        self.netwoking.unifiedSearchFilesProvider(id: lastSearchResult.id, term: term, limit: 5, cursor: cursor, account: session.account) { task in
+        self.networking.unifiedSearchFilesProvider(id: lastSearchResult.id, term: term, limit: 5, cursor: cursor, account: session.account) { task in
             self.dataSourceTask = task
-            self.reloadDataSource()
+            Task {
+                await self.reloadDataSource()
+            }
         } completion: { _, searchResult, metadatas, error in
             if error != .success {
                 NCContentPresenter().showError(error: error)
@@ -827,8 +919,10 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     // MARK: - Push metadata
 
     func pushMetadata(_ metadata: tableMetadata) {
-        guard let navigationCollectionViewCommon = self.controller?.navigationCollectionViewCommon else { return }
-        let serverUrlPush = utilityFileSystem.stringAppendServerUrl(metadata.serverUrl, addFileName: metadata.fileName)
+        guard let navigationCollectionViewCommon = self.controller?.navigationCollectionViewCommon else {
+            return
+        }
+        let serverUrlPush = utilityFileSystem.createServerUrl(serverUrl: metadata.serverUrl, fileName: metadata.fileName)
 
         if let viewController = navigationCollectionViewCommon.first(where: { $0.navigationController == self.navigationController && $0.serverUrl == serverUrlPush})?.viewController, viewController.isViewLoaded {
             navigationController?.pushViewController(viewController, animated: true)
@@ -863,7 +957,7 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
 
         if isRecommendationActived,
            !isSearchingMode,
-           NCKeychain().showRecommendedFiles,
+           NCPreferences().showRecommendedFiles,
            !self.database.getRecommendedFiles(account: self.session.account).isEmpty {
             heightHeaderRecommendations = self.heightHeaderRecommendations
             heightHeaderSection = self.heightHeaderSection
@@ -900,21 +994,25 @@ class NCCollectionViewCommon: UIViewController, UIGestureRecognizerDelegate, UIS
     // MARK: - Footer size
 
     func sizeForFooterInSection(section: Int) -> CGSize {
+        guard let controller else {
+            return CGSize.zero
+        }
         let sections = dataSource.numberOfSections()
-        let metadataForSection = self.dataSource.getMetadataForSection(section)
-        let isPaginated = metadataForSection?.lastSearchResult?.isPaginated ?? false
-        let metadatasCount: Int = metadataForSection?.lastSearchResult?.entries.count ?? 0
-        var size = CGSize(width: collectionView.frame.width, height: 0)
+        let bottomAreaInsets: CGFloat = controller.tabBar.safeAreaInsets.bottom == 0 ? 34 : 0
+        let height = controller.tabBar.frame.height + bottomAreaInsets
+
+        if isEditMode {
+            return CGSize(width: collectionView.frame.width, height: 90 + height)
+        }
+
+        if isSearchingMode {
+            return CGSize(width: collectionView.frame.width, height: 50)
+        }
 
         if section == sections - 1 {
-            size.height += 85
+            return CGSize(width: collectionView.frame.width, height: height)
         } else {
-            size.height += 1
+            return CGSize(width: collectionView.frame.width, height: 0)
         }
-
-        if isSearchingMode && isPaginated && metadatasCount > 0 {
-            size.height += 30
-        }
-        return size
     }
 }

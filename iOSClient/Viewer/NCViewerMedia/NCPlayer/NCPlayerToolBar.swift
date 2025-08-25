@@ -449,37 +449,40 @@ extension NCPlayerToolBar {
 extension NCPlayerToolBar: NCSelectDelegate {
     func dismissSelect(serverUrl: String?, metadata: tableMetadata?, type: String, items: [Any], overwrite: Bool, copy: Bool, move: Bool, session: NCSession.Session) {
         if let metadata = metadata, let viewerMediaPage = viewerMediaPage {
-            let serverUrlFileName = metadata.serverUrl + "/" + metadata.fileName
-            let fileNameLocalPath = NCUtilityFileSystem().getDirectoryProviderStorageOcId(metadata.ocId, fileNameView: metadata.fileNameView)
+            let fileNameLocalPath = NCUtilityFileSystem().getDirectoryProviderStorageOcId(metadata.ocId, fileName: metadata.fileNameView, userId: metadata.userId, urlBase: metadata.urlBase)
 
             if utilityFileSystem.fileProviderStorageExists(metadata) {
                 addPlaybackSlave(type: type, metadata: metadata)
             } else {
                 var downloadRequest: DownloadRequest?
-                hud.initHudRing(view: viewerMediaPage.view,
-                                text: NSLocalizedString("_downloading_", comment: ""),
-                                tapToCancelDetailText: true) {
+                hud.ringProgress(view: viewerMediaPage.view, text: NSLocalizedString("_downloading_", comment: ""), tapToCancelDetailText: true) {
                     if let request = downloadRequest {
                         request.cancel()
                     }
                 }
 
-                NextcloudKit.shared.download(serverUrlFileName: serverUrlFileName, fileNameLocalPath: fileNameLocalPath, account: metadata.account, requestHandler: { request in
+                NextcloudKit.shared.download(serverUrlFileName: metadata.serverUrlFileName, fileNameLocalPath: fileNameLocalPath, account: metadata.account, requestHandler: { request in
                     downloadRequest = request
                 }, taskHandler: { task in
-                    self.database.setMetadataSession(ocId: metadata.ocId,
-                                                     sessionTaskIdentifier: task.taskIdentifier,
-                                                     status: self.global.metadataStatusDownloading)
+                    Task {
+                        let ocId = metadata.ocId
+                        await self.database.setMetadataSessionAsync(ocId: ocId,
+                                                                    sessionTaskIdentifier: task.taskIdentifier,
+                                                                    status: self.global.metadataStatusDownloading)
+                    }
                 }, progressHandler: { progress in
                     self.hud.progress(progress.fractionCompleted)
                 }) { _, etag, _, _, _, _, error in
                     self.hud.dismiss()
-                    self.database.setMetadataSession(ocId: metadata.ocId,
-                                                     session: "",
-                                                     sessionTaskIdentifier: 0,
-                                                     sessionError: "",
-                                                     status: self.global.metadataStatusNormal,
-                                                     etag: etag)
+                    Task {
+                        let ocId = metadata.ocId
+                        await self.database.setMetadataSessionAsync(ocId: ocId,
+                                                                    session: "",
+                                                                    sessionTaskIdentifier: 0,
+                                                                    sessionError: "",
+                                                                    status: self.global.metadataStatusNormal,
+                                                                    etag: etag)
+                    }
                     if error == .success {
                         self.hud.success()
                         self.addPlaybackSlave(type: type, metadata: metadata)
@@ -494,7 +497,7 @@ extension NCPlayerToolBar: NCSelectDelegate {
     // swiftlint:disable inclusive_language
     func addPlaybackSlave(type: String, metadata: tableMetadata) {
     // swiftlint:enable inclusive_language
-        let fileNameLocalPath = utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId, fileNameView: metadata.fileNameView)
+        let fileNameLocalPath = utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId, fileName: metadata.fileNameView, userId: metadata.userId, urlBase: metadata.urlBase)
 
         if type == "subtitle" {
             self.ncplayer?.player.addPlaybackSlave(URL(fileURLWithPath: fileNameLocalPath), type: .subtitle, enforce: true)

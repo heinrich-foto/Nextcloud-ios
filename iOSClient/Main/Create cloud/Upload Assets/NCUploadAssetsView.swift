@@ -122,7 +122,7 @@ struct NCUploadAssetsView: View {
                                                 Text(renameError)
                                             }
                                     }
-                                    .onChange(of: renameFileName) { newValue in
+                                    .onChange(of: renameFileName) { _, newValue in
                                         if let error = FileNameValidator.checkFileName(newValue, account: model.controller?.account, capabilities: model.capabilities) {
                                             renameError = error.errorDescription
                                         } else {
@@ -135,9 +135,8 @@ struct NCUploadAssetsView: View {
                     }
 
                     Section {
-                        ///
-                        /// Auto upload requires creating folders and subfolders which are difficult to manage offline
-                        /// 
+                        // Auto upload requires creating folders and subfolders which are difficult to manage offline
+                        // 
                         if NCNetworking.shared.isOnline {
                             Toggle(isOn: $model.useAutoUploadFolder, label: {
                                 Text(NSLocalizedString("_use_folder_auto_upload_", comment: ""))
@@ -167,11 +166,9 @@ struct NCUploadAssetsView: View {
                                             .frame(maxWidth: .infinity, alignment: .trailing)
                                     }
                                 } icon: {
-                                    Image("folder")
-                                        .renderingMode(.template)
+                                    Image(uiImage: NCImageCache.shared.getFolder(account: model.session.account))
                                         .resizable()
                                         .scaledToFit()
-                                        .foregroundColor(Color(NCBrandColor.shared.getElement(account: metadata?.account)))
                                 }
                             }
                             .contentShape(Rectangle())

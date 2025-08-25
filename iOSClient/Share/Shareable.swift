@@ -20,6 +20,7 @@ protocol Shareable: AnyObject {
     var expirationDate: NSDate? { get set }
     var shareWithDisplayname: String { get set }
     var attributes: String? { get set }
+    var itemType: String { get set }
 }
 
 // MARK: - Default Implementations
@@ -63,7 +64,7 @@ extension tableShare: Shareable {
         set {
             attributes = NCManageDatabase.shared.setAttibuteDownload(state: newValue)
         }
-    }    
+    }
 }
 
 // MARK: - NKShare Extension

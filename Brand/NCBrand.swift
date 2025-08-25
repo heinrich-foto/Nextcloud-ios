@@ -26,7 +26,7 @@ final class NCBrandOptions: @unchecked Sendable {
     var textCopyrightNextcloudiOS: String = "Nextcloud Matheria for iOS %@ © 2025"
     var textCopyrightNextcloudServer: String = "Nextcloud Server %@"
     var loginBaseUrl: String = "https://cloud.nextcloud.com"
-    var pushNotificationServerProxy: String = "https://push-notifications.nextcloud.com"
+    var pushNotificationServerProxy: String = ""
     var linkLoginHost: String = "https://nextcloud.com/install"
     var linkloginPreferredProviders: String = "https://nextcloud.com/signup-ios"
     var webLoginAutenticationProtocol: String = "nc://"                                        // example "abc://"
@@ -55,11 +55,12 @@ final class NCBrandOptions: @unchecked Sendable {
     var disable_openin_file: Bool = false                                                       // Don't touch me !!
     var disable_crash_service: Bool = false
     var disable_log: Bool = false
-    var disable_mobileconfig: Bool = false
+    var disable_mobileconfig: Bool = false  
     var disable_show_more_nextcloud_apps_in_settings: Bool = false
     var doNotAskPasscodeAtStartup: Bool = false
     var disable_source_code_in_settings: Bool = false
     var enforce_passcode_lock = false
+    var enforce_privacyScreenEnabled = false
 
     // Example: (name: "Name 1", url: "https://cloud.nextcloud.com"),(name: "Name 2", url: "https://cloud.nextcloud.com")
     var enforce_servers: [(name: String, url: String)] = []
@@ -68,9 +69,9 @@ final class NCBrandOptions: @unchecked Sendable {
     var cleanUpDay: Int = 0                                                                     // Set default "Delete all cached files older than" possible days value are: 0, 1, 7, 30, 90, 180, 365
 
     // Max request/download/upload concurrent
-    let httpMaximumConnectionsPerHost: Int = 6
-    let httpMaximumConnectionsPerHostInDownload: Int = 6
-    let httpMaximumConnectionsPerHostInUpload: Int = 6
+    let httpMaximumConnectionsPerHost: Int = 8
+    let httpMaximumConnectionsPerHostInDownload: Int = 8
+    let httpMaximumConnectionsPerHostInUpload: Int = 8
 
     // Number of failed attempts after reset app
     let resetAppPasscodeAttempts: Int = 10
@@ -110,9 +111,12 @@ final class NCBrandOptions: @unchecked Sendable {
             }
         }
 
-#if DEBUG
-        pushNotificationServerProxy = "https://c0004.customerpush.nextcloud.com"
-#endif
+        if pushNotificationServerProxy.isEmpty,
+            brand == "Nextcloud" {
+            pushNotificationServerProxy = "https://push-notifications.nextcloud.com"
+            // DEBUG SERVER PUSH
+            // pushNotificationServerProxy = "https://c0004.customerpush.nextcloud.com"
+        }
     }
 
     @objc func getUserAgent() -> String {
@@ -123,8 +127,7 @@ final class NCBrandOptions: @unchecked Sendable {
 final class NCBrandColor: @unchecked Sendable {
     static let shared = NCBrandColor()
 
-    /// This is rewrited from customet theme, default is Nextcloud color
-    ///
+    // This is rewrited from customet theme, default is Nextcloud color
     let customer: UIColor = UIColor(red: 0.0 / 255.0, green: 130.0 / 255.0, blue: 201.0 / 255.0, alpha: 1.0)         // BLU NC : #0082c9
     var customerText: UIColor = .white
 
@@ -215,7 +218,7 @@ final class NCBrandColor: @unchecked Sendable {
     }
 
     @discardableResult
-    func settingThemingColor(account: String) -> Bool {
+    func settingThemingColor(account: String, capabilities: NKCapabilities.Capabilities) -> Bool {
         let darker: CGFloat = 30    // %
         let lighter: CGFloat = 30   // %
         var colorThemingColor: UIColor?
@@ -223,7 +226,6 @@ final class NCBrandColor: @unchecked Sendable {
         var colorThemingColorText: UIColor?
 
         if NCBrandOptions.shared.use_themingColor {
-            let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: account)
             let themingColor = capabilities.themingColor
             let themingColorElement = capabilities.themingColorElement
             let themingColorText = capabilities.themingColorText
@@ -294,7 +296,6 @@ final class NCBrandColor: @unchecked Sendable {
         }
 
         if self.themingColor[account] != colorThemingColor || self.themingColorElement[account] != colorThemingColorElement || self.themingColorText[account] != colorThemingColorText {
-
             self.themingColor[account] = colorThemingColor
             self.themingColorElement[account] = colorThemingColorElement
             self.themingColorText[account] = colorThemingColorText

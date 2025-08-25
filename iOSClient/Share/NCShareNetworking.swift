@@ -107,8 +107,18 @@ class NCShareNetworking: NSObject {
 
         NCActivityIndicator.shared.start(backgroundView: view)
         let filenamePath = utilityFileSystem.getFileNamePath(metadata.fileName, serverUrl: metadata.serverUrl, session: session)
+        let capabilities = NCNetworking.shared.capabilities[self.metadata.account] ?? NKCapabilities.Capabilities()
 
-        NextcloudKit.shared.createShare(path: filenamePath, shareType: template.shareType, shareWith: template.shareWith, password: template.password, note: template.note, permissions: template.permissions, attributes: template.attributes, account: metadata.account) { _, share, _, error in
+        NextcloudKit.shared.createShare(path: filenamePath,
+                                        shareType: template.shareType,
+                                        shareWith: template.shareWith,
+                                        publicUpload: false,
+                                        note: template.note,
+                                        hideDownload: false,
+                                        password: template.password,
+                                        permissions: template.permissions,
+                                        attributes: template.attributes,
+                                        account: metadata.account) { _, share, _, error in
             NCActivityIndicator.shared.stop()
 
             if error == .success, let share = share {
@@ -120,13 +130,16 @@ class NCShareNetworking: NSObject {
                     self.updateShare(template, downloadLimit: downloadLimit)
                     // Download limit update should happen implicitly on share update.
                 } else {
-                    if case let .limited(limit, _) = downloadLimit {
+                    if case let .limited(limit, _) = downloadLimit,
+                        capabilities.fileSharingDownloadLimit {
                         self.setShareDownloadLimit(limit, token: share.token)
                     }
                 }
 
-                NCNetworking.shared.notifyAllDelegates { delegate in
-                    delegate.transferRequestData(serverUrl: self.metadata.serverUrl)
+                Task {
+                    await NCNetworking.shared.transferDispatcher.notifyAllDelegates { delegate in
+                        delegate.transferRequestData(serverUrl: self.metadata.serverUrl)
+                    }
                 }
             } else {
                 NCContentPresenter().showError(error: error)
@@ -145,8 +158,10 @@ class NCShareNetworking: NSObject {
                 self.database.deleteTableShare(account: account, idShare: idShare)
                 self.delegate?.unShareCompleted()
 
-                NCNetworking.shared.notifyAllDelegates { delegate in
-                    delegate.transferRequestData(serverUrl: self.metadata.serverUrl)
+                Task {
+                    await NCNetworking.shared.transferDispatcher.notifyAllDelegates { delegate in
+                        delegate.transferRequestData(serverUrl: self.metadata.serverUrl)
+                    }
                 }
             } else {
                 NCContentPresenter().showError(error: error)
@@ -161,17 +176,23 @@ class NCShareNetworking: NSObject {
 
             if error == .success, let share = share {
                 let home = self.utilityFileSystem.getHomeServer(session: self.session)
+                let capabilities = NCNetworking.shared.capabilities[self.metadata.account] ?? NKCapabilities.Capabilities()
+
                 self.database.addShare(account: self.metadata.account, home: home, shares: [share])
                 self.delegate?.readShareCompleted()
 
-                if case let .limited(limit, _) = downloadLimit {
-                    self.setShareDownloadLimit(limit, token: share.token)
-                } else {
-                    self.removeShareDownloadLimit(token: share.token)
+                if capabilities.fileSharingDownloadLimit {
+                    if case let .limited(limit, _) = downloadLimit {
+                        self.setShareDownloadLimit(limit, token: share.token)
+                    } else {
+                        self.removeShareDownloadLimit(token: share.token)
+                    }
                 }
 
-                NCNetworking.shared.notifyAllDelegates { delegate in
-                    delegate.transferRequestData(serverUrl: self.metadata.serverUrl)
+                Task {
+                    await NCNetworking.shared.transferDispatcher.notifyAllDelegates { delegate in
+                        delegate.transferRequestData(serverUrl: self.metadata.serverUrl)
+                    }
                 }
             } else {
                 NCContentPresenter().showError(error: error)
@@ -200,7 +221,7 @@ class NCShareNetworking: NSObject {
     /// Remove the download limit on the share, if existent.
     ///
     func removeShareDownloadLimit(token: String) {
-        let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: metadata.account)
+        let capabilities = NCNetworking.shared.capabilities[self.metadata.account] ?? NKCapabilities.Capabilities()
 
         if !capabilities.fileSharingDownloadLimit {
             return
@@ -225,7 +246,7 @@ class NCShareNetworking: NSObject {
     /// - Parameter limit: The new download limit to set.
     ///
     func setShareDownloadLimit(_ limit: Int, token: String) {
-        let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: metadata.account)
+        let capabilities = NCNetworking.shared.capabilities[self.metadata.account] ?? NKCapabilities.Capabilities()
 
         if !capabilities.fileSharingDownloadLimit {
             return

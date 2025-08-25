@@ -1,25 +1,6 @@
-//
-//  NCFiles.swift
-//  Nextcloud
-//
-//  Created by Marino Faggiana on 26/09/2020.
-//  Copyright © 2020 Marino Faggiana. All rights reserved.
-//
-//  Author Marino Faggiana <marino.faggiana@nextcloud.com>
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU General Public License for more details.
-//
-//  You should have received a copy of the GNU General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-//
+// SPDX-FileCopyrightText: Nextcloud GmbH
+// SPDX-FileCopyrightText: 2020 Marino Faggiana
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 import UIKit
 import NextcloudKit
@@ -59,7 +40,8 @@ class NCFiles: NCCollectionViewCommon {
         plusButton.setImage(image, for: .normal)
         plusButton.backgroundColor = NCBrandColor.shared.customer
         if let activeTableAccount = NCManageDatabase.shared.getActiveTableAccount() {
-            self.plusButton.backgroundColor = NCBrandColor.shared.getElement(account: activeTableAccount.account)
+            let color = NCBrandColor.shared.getElement(account: activeTableAccount.account)
+            self.plusButton.backgroundColor = color
         }
         plusButton.accessibilityLabel = NSLocalizedString("_accessibility_add_upload_", comment: "")
         plusButton.layer.cornerRadius = plusButton.frame.size.width / 2.0
@@ -68,25 +50,31 @@ class NCFiles: NCCollectionViewCommon {
         plusButton.layer.shadowRadius = 3.0
         plusButton.layer.shadowOpacity = 0.5
 
-        NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterChangeTheming), object: nil, queue: nil) { _ in
-            if let activeTableAccount = NCManageDatabase.shared.getActiveTableAccount() {
-                self.plusButton.backgroundColor = NCBrandColor.shared.getElement(account: activeTableAccount.account)
+        NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterChangeTheming), object: nil, queue: nil) { notification in
+            if let userInfo = notification.userInfo,
+               let account = userInfo["account"] as? String,
+               self.controller?.account == account {
+                let color = NCBrandColor.shared.getElement(account: account)
+                self.plusButton.backgroundColor = color
             }
         }
 
         if self.serverUrl.isEmpty {
 
-            ///
-            /// Set ServerURL when start (isEmpty)
-            ///
+            //
+            // Set ServerURL when start (isEmpty)
+            //
             self.serverUrl = utilityFileSystem.getHomeServer(session: session)
             self.titleCurrentFolder = getNavigationTitle()
 
             NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterChangeUser), object: nil, queue: nil) { notification in
-                if let userInfo = notification.userInfo, let account = userInfo["account"] as? String {
+                if let userInfo = notification.userInfo,
+                   let account = userInfo["account"] as? String {
                     if let controller = userInfo["controller"] as? NCMainTabBarController,
                        controller == self.controller {
                         controller.account = account
+                        let color = NCBrandColor.shared.getElement(account: account)
+                        self.plusButton.backgroundColor = color
                     } else {
                         return
                     }
@@ -109,10 +97,12 @@ class NCFiles: NCCollectionViewCommon {
 
                 self.titleCurrentFolder = self.getNavigationTitle()
                 self.navigationItem.title = self.titleCurrentFolder
-                (self.navigationController as? NCMainNavigationController)?.setNavigationLeftItems()
 
-                self.reloadDataSource()
-                self.getServerData()
+                Task {
+                    await (self.navigationController as? NCMainNavigationController)?.setNavigationLeftItems()
+                    await self.reloadDataSource()
+                    await self.getServerData()
+                }
             }
         }
     }
@@ -121,7 +111,9 @@ class NCFiles: NCCollectionViewCommon {
         super.viewWillAppear(animated)
 
         resetPlusButtonAlpha()
-        reloadDataSource()
+        Task {
+            await self.reloadDataSource()
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -135,7 +127,9 @@ class NCFiles: NCCollectionViewCommon {
         }
 
         if !isSearchingMode {
-            getServerData()
+            Task {
+                await getServerData()
+            }
         }
     }
 
@@ -149,177 +143,234 @@ class NCFiles: NCCollectionViewCommon {
     // MARK: - Action
 
     @IBAction func plusButtonAction(_ sender: UIButton) {
-        resetPlusButtonAlpha()
-        guard let controller else { return }
-        let fileFolderPath = NCUtilityFileSystem().getFileNamePath("", serverUrl: serverUrl, session: NCSession.shared.getSession(controller: controller))
-        let fileFolderName = (serverUrl as NSString).lastPathComponent
-        let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: controller.account)
-
-        if let directory = NCManageDatabase.shared.getTableDirectory(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", controller.account, serverUrl)) {
-            if !directory.permissions.contains("CK") {
-                let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_no_permission_add_file_")
-                NCContentPresenter().showWarning(error: error)
-                return
-            }
-        }
-
-        if !FileNameValidator.checkFolderPath(fileFolderPath, account: controller.account, capabilities: capabilities) {
-            controller.present(UIAlertController.warning(message: "\(String(format: NSLocalizedString("_file_name_validator_error_reserved_name_", comment: ""), fileFolderName)) \(NSLocalizedString("_please_rename_file_", comment: ""))"), animated: true)
+        guard let controller else {
             return
         }
+        resetPlusButtonAlpha()
+        Task { @MainActor in
+            let capabilities = await NKCapabilities.shared.getCapabilities(for: controller.account)
+            let fileFolderPath = NCUtilityFileSystem().getFileNamePath("", serverUrl: serverUrl, session: NCSession.shared.getSession(controller: controller))
+            let fileFolderName = (serverUrl as NSString).lastPathComponent
 
-        self.appDelegate.toggleMenu(controller: controller, sender: sender)
+            if let directory = await NCManageDatabase.shared.getTableDirectoryAsync(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", controller.account, serverUrl)) {
+                if !directory.permissions.contains("CK") {
+                    let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_no_permission_add_file_")
+                    NCContentPresenter().showWarning(error: error)
+                    return
+                }
+            }
+
+            if !FileNameValidator.checkFolderPath(fileFolderPath, account: controller.account, capabilities: capabilities) {
+                let message = "\(String(format: NSLocalizedString("_file_name_validator_error_reserved_name_", comment: ""), fileFolderName)) \(NSLocalizedString("_please_rename_file_", comment: ""))"
+                await UIAlertController.warningAsync( message: message, presenter: controller)
+                return
+            }
+            self.appDelegate.toggleMenu(controller: controller, sender: sender)
+        }
     }
 
     // MARK: - DataSource
 
-    override func reloadDataSource() {
-        guard !isSearchingMode
-        else {
-            return super.reloadDataSource()
+    override func reloadDataSource() async {
+        guard !isSearchingMode else {
+            await super.reloadDataSource()
+            return
         }
 
-        var predicate = self.defaultPredicate
-        let predicateDirectory = NSPredicate(format: "account == %@ AND serverUrl == %@", self.session.account, self.serverUrl)
-
-        if NCKeychain().getPersonalFilesOnly(account: self.session.account) {
-            predicate = self.personalFilesOnlyPredicate
-        }
-
-        self.metadataFolder = self.database.getMetadataFolder(session: self.session, serverUrl: self.serverUrl)
-        self.richWorkspaceText = self.database.getTableDirectory(predicate: predicateDirectory)?.richWorkspace
-
-        self.database.getMetadatas(predicate: predicate,
-                                   layoutForView: self.layoutForView,
-                                   account: self.session.account) { metadatas, layoutForView, account in
-            self.dataSource = NCCollectionViewDataSource(metadatas: metadatas, layoutForView: layoutForView, account: account)
-            self.dataSource.caching(metadatas: metadatas) {
-                super.reloadDataSource()
+        let personalFilesOnly = NCPreferences().getPersonalFilesOnly(account: self.session.account)
+        let predicate: NSPredicate = {
+            if personalFilesOnly {
+                return self.personalFilesOnlyPredicate
+            } else {
+                return self.defaultPredicate
             }
+        }()
+
+        self.metadataFolder = await self.database.getMetadataFolderAsync(session: self.session, serverUrl: self.serverUrl)
+        if let tblDirectory = await self.database.getTableDirectoryAsync(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", self.session.account, self.serverUrl)) {
+            self.richWorkspaceText = tblDirectory.richWorkspace
         }
+        if let metadataFolder {
+            nkLog(info: "Inside metadata folder \(metadataFolder.fileName) with permissions: \(metadataFolder.permissions)")
+
+            // disable + button if no create permission
+            let color = NCBrandColor.shared.getElement(account: self.session.account)
+            plusButton.isEnabled = metadataFolder.isCreatable
+            plusButton.backgroundColor = metadataFolder.isCreatable ? color : .lightGray
+        }
+
+        let metadatas = await self.database.getMetadatasAsync(predicate: predicate,
+                                                              withLayout: self.layoutForView,
+                                                              withAccount: self.session.account)
+
+        self.dataSource = NCCollectionViewDataSource(metadatas: metadatas,
+                                                     layoutForView: layoutForView,
+                                                     account: session.account)
+        await super.reloadDataSource()
+
+        cachingAsync(metadatas: metadatas)
     }
 
-    override func getServerData() {
+    override func getServerData(forced: Bool = false) async {
+        await super.getServerData()
+
+        defer {
+            restoreDefaultTitle()
+        }
+
         guard !isSearchingMode else {
             return networkSearch()
         }
 
-        func downloadMetadata(_ metadata: tableMetadata) -> Bool {
-            let fileSize = utilityFileSystem.fileProviderStorageSize(metadata.ocId, fileNameView: metadata.fileNameView)
+        func downloadMetadata(_ metadata: tableMetadata) async -> Bool {
+            let fileSize = utilityFileSystem.fileProviderStorageSize(metadata.ocId,
+                                                                     fileName: metadata.fileNameView,
+                                                                     userId: metadata.userId,
+                                                                     urlBase: metadata.urlBase)
             guard fileSize > 0 else { return false }
 
-            if let localFile = database.getResultsTableLocalFile(predicate: NSPredicate(format: "ocId == %@", metadata.ocId))?.first {
-                if localFile.etag != metadata.etag {
+            if let tblLocalFile = await database.getTableLocalFileAsync(predicate: NSPredicate(format: "ocId == %@", metadata.ocId)) {
+                if tblLocalFile.etag != metadata.etag {
                     return true
                 }
             }
             return false
         }
 
-        DispatchQueue.global().async {
-            self.networkReadFolder { metadatas, error in
-                if error == .success {
-                    let metadatas: [tableMetadata] = metadatas ?? self.dataSource.getMetadatas()
-                    for metadata in metadatas where !metadata.directory && downloadMetadata(metadata) {
-                        if let metadata = self.database.setMetadataSessionInWaitDownload(ocId: metadata.ocId,
-                                                                                         session: NCNetworking.shared.sessionDownload,
-                                                                                         selector: NCGlobal.shared.selectorDownloadFile,
-                                                                                         sceneIdentifier: self.controller?.sceneIdentifier) {
-                            NCNetworking.shared.download(metadata: metadata)
-                        }
+        let resultsReadFolder = await networkReadFolderAsync(serverUrl: self.serverUrl, forced: forced)
+        guard resultsReadFolder.error == .success, resultsReadFolder.reloadRequired else {
+            return
+        }
+
+        let metadatasForDownload: [tableMetadata] = resultsReadFolder.metadatas ?? self.dataSource.getMetadatas()
+        Task.detached(priority: .utility) {
+            for metadata in metadatasForDownload where !metadata.directory {
+                if await downloadMetadata(metadata) {
+                    if let metadata = await self.database.setMetadataSessionInWaitDownloadAsync(ocId: metadata.ocId,
+                                                                                                session: NCNetworking.shared.sessionDownload,
+                                                                                                selector: NCGlobal.shared.selectorDownloadFile,
+                                                                                                sceneIdentifier: self.controller?.sceneIdentifier) {
+                        await NCNetworking.shared.downloadFile(metadata: metadata)
                     }
-                }
-                DispatchQueue.main.async {
-                    self.refreshControlEndRefreshing()
-                    self.reloadDataSource()
                 }
             }
         }
+
+        await self.reloadDataSource()
     }
 
-    private func networkReadFolder(completion: @escaping (_ metadatas: [tableMetadata]?, _ error: NKError) -> Void) {
-        NCNetworking.shared.readFile(serverUrlFileName: serverUrl, account: session.account) { task in
+    private func networkReadFolderAsync(serverUrl: String, forced: Bool) async -> (metadatas: [tableMetadata]?, error: NKError, reloadRequired: Bool) {
+        let resultsReadFile = await NCNetworking.shared.readFileAsync(serverUrlFileName: serverUrl, account: session.account) { task in
             self.dataSourceTask = task
             if self.dataSource.isEmpty() {
                 self.collectionView.reloadData()
             }
-        } completion: { account, metadata, error in
-            let isDirectoryE2EE = NCUtilityFileSystem().isDirectoryE2EE(session: self.session, serverUrl: self.serverUrl)
-            guard error == .success, let metadata else {
-                return completion(nil, error)
-            }
-            /// Check change eTag or E2EE  or DataSource empty
-            self.database.updateDirectoryRichWorkspace(metadata.richWorkspace, account: account, serverUrl: self.serverUrl)
-            let tableDirectory = self.database.getTableDirectory(ocId: metadata.ocId)
-            guard tableDirectory?.etag != metadata.etag || metadata.e2eEncrypted || self.dataSource.isEmpty() else {
-                return completion(nil, NKError())
-            }
+        }
+        guard resultsReadFile.error == .success, let metadata = resultsReadFile.metadata else {
+            return (nil, resultsReadFile.error, false)
+        }
+        let e2eEncrypted = metadata.e2eEncrypted
+        let ocId = metadata.ocId
 
-            NCNetworking.shared.readFolder(serverUrl: self.serverUrl,
-                                           account: metadata.account,
-                                           queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue) { task in
-                self.dataSourceTask = task
-                if self.dataSource.isEmpty() {
-                    self.collectionView.reloadData()
-                }
-            } completion: { account, metadataFolder, metadatas, error in
-                /// Error
-                guard error == .success else {
-                    return completion(nil, error)
-                }
-                /// Updata folder
-                if let metadataFolder {
-                    self.metadataFolder = tableMetadata(value: metadataFolder)
-                    self.richWorkspaceText = metadataFolder.richWorkspace
-                }
+        await self.database.updateDirectoryRichWorkspaceAsync(metadata.richWorkspace, account: resultsReadFile.account, serverUrl: serverUrl)
+        let tableDirectory = await self.database.getTableDirectoryAsync(ocId: metadata.ocId)
 
-                guard let metadataFolder,
-                      isDirectoryE2EE,
-                      NCKeychain().isEndToEndEnabled(account: account),
-                      !NCNetworkingE2EE().isInUpload(account: account, serverUrl: self.serverUrl) else {
-                    return completion(metadatas, error)
-                }
+        let shouldSkipUpdate: Bool = (
+            !forced &&
+            tableDirectory?.etag == metadata.etag &&
+            !metadata.e2eEncrypted &&
+            !self.dataSource.isEmpty()
+        )
 
-                /// E2EE
-                let lock = self.database.getE2ETokenLock(account: account, serverUrl: self.serverUrl)
-                NCNetworkingE2EE().getMetadata(fileId: metadataFolder.ocId, e2eToken: lock?.e2eToken, account: account) { account, version, e2eMetadata, signature, _, error in
-                    if error == .success, let e2eMetadata {
-                        let error = NCEndToEndMetadata().decodeMetadata(e2eMetadata, signature: signature, serverUrl: self.serverUrl, session: self.session)
-                        let capabilities = NCCapabilities.shared.getCapabilitiesBlocking(for: self.session.account)
-                        if error == .success {
-                            if version == "v1", capabilities.e2EEApiVersion == NCGlobal.shared.e2eeVersionV20 {
-                                nkLog(tag: self.global.logTagE2EE, message: "Conversion v1 to v2")
-                                NCActivityIndicator.shared.start()
-                                Task {
-                                    let serverUrl = metadataFolder.serverUrl + "/" + metadataFolder.fileName
-                                    let error = await NCNetworkingE2EE().uploadMetadata(serverUrl: serverUrl, updateVersionV1V2: true, account: account)
-                                    if error != .success {
-                                        NCContentPresenter().showError(error: error)
-                                    }
-                                    NCActivityIndicator.shared.stop()
-                                }
-                            }
-                        } else {
-                            // Client Diagnostic
-                            self.database.addDiagnostic(account: account, issue: NCGlobal.shared.diagnosticIssueE2eeErrors)
-                            NCContentPresenter().showError(error: error)
-                        }
-                    } else if error.errorCode == NCGlobal.shared.errorResourceNotFound {
-                        // no metadata found, send a new metadata
-                        let serverUrl = metadataFolder.serverUrl + "/" + metadataFolder.fileName
-                        Task {
-                            let error = await NCNetworkingE2EE().uploadMetadata(serverUrl: serverUrl, account: account)
-                            if error != .success {
-                                NCContentPresenter().showError(error: error)
-                            }
-                        }
-                    } else {
-                        NCContentPresenter().showError(error: NKError(errorCode: NCGlobal.shared.errorE2EEKeyDecodeMetadata, errorDescription: "_e2e_error_"))
-                    }
-                    completion(metadatas, error)
-                }
+        if shouldSkipUpdate {
+            return (nil, NKError(), false)
+        }
+
+        showLoadingTitle()
+
+        let options = NKRequestOptions(timeout: 180)
+        let (account, metadataFolder, metadatas, error) = await NCNetworking.shared.readFolderAsync(serverUrl: serverUrl,
+                                                                                                    account: session.account,
+                                                                                                    options: options) { task in
+            self.dataSourceTask = task
+            if self.dataSource.isEmpty() {
+                self.collectionView.reloadData()
             }
         }
+
+        guard error == .success else {
+            return (nil, error, false)
+        }
+
+        if let metadataFolder {
+            self.metadataFolder = metadataFolder.detachedCopy()
+            self.richWorkspaceText = metadataFolder.richWorkspace
+        }
+
+        //
+        // E2EE section
+        //
+
+        guard e2eEncrypted,
+              let metadatas,
+              !metadatas.isEmpty,
+              NCPreferences().isEndToEndEnabled(account: account),
+              await !NCNetworkingE2EE().isInUpload(account: account, serverUrl: serverUrl) else {
+            return (metadatas, error, true)
+        }
+
+        let lock = await self.database.getE2ETokenLockAsync(account: account, serverUrl: serverUrl)
+        if let e2eToken = lock?.e2eToken {
+            nkLog(tag: self.global.logTagE2EE, message: "Tocken: \(e2eToken)", minimumLogLevel: .verbose)
+        }
+
+        let results = await NCNetworkingE2EE().getMetadata(fileId: ocId, e2eToken: lock?.e2eToken, account: account)
+
+        nkLog(tag: self.global.logTagE2EE, message: "Get metadata with error: \(results.error.errorCode)")
+        nkLog(tag: self.global.logTagE2EE, message: "Get metadata with metadata: \(results.e2eMetadata ?? ""), signature: \(results.signature ?? ""), version \(results.version ?? "")", minimumLogLevel: .verbose)
+
+        guard results.error == .success,
+              let e2eMetadata = results.e2eMetadata,
+              let version = results.version else {
+
+            // No metadata fount, re-send it
+            if results.error.errorCode == NCGlobal.shared.errorResourceNotFound {
+                NCContentPresenter().showInfo(description: "Metadata not found")
+                let error = await NCNetworkingE2EE().uploadMetadata(serverUrl: serverUrl, account: account)
+                if error != .success {
+                    NCContentPresenter().showError(error: error)
+                }
+            } else {
+                // show error
+                NCContentPresenter().showError(error: results.error)
+            }
+
+            return (metadatas, error, true)
+        }
+
+        let errorDecodeMetadata = await NCEndToEndMetadata().decodeMetadata(e2eMetadata, signature: results.signature, serverUrl: serverUrl, session: self.session)
+        nkLog(debug: "Decode e2ee metadata with error: \(errorDecodeMetadata.errorCode)")
+
+        if errorDecodeMetadata == .success {
+            let capabilities = await NKCapabilities.shared.getCapabilities(for: self.session.account)
+            if version == "v1", capabilities.e2EEApiVersion == NCGlobal.shared.e2eeVersionV20 {
+                NCContentPresenter().showInfo(description: "Conversion metadata v1 to v2 required, please wait...")
+                nkLog(tag: self.global.logTagE2EE, message: "Conversion v1 to v2")
+                NCActivityIndicator.shared.start()
+
+                let error = await NCNetworkingE2EE().uploadMetadata(serverUrl: serverUrl, updateVersionV1V2: true, account: account)
+                if error != .success {
+                    NCContentPresenter().showError(error: error)
+                }
+                NCActivityIndicator.shared.stop()
+            }
+        } else {
+            // Client Diagnostic
+            await self.database.addDiagnosticAsync(account: account, issue: NCGlobal.shared.diagnosticIssueE2eeErrors)
+            NCContentPresenter().showError(error: error)
+        }
+
+        return (metadatas, error, true)
     }
 
     func blinkCell(fileName: String?) {
@@ -360,7 +411,7 @@ class NCFiles: NCCollectionViewCommon {
         }
 
         if animated {
-            UIView.animate(withDuration: 0.2, animations: update)
+            UIView.animate(withDuration: 0.3, animations: update)
         } else {
             update()
         }
@@ -385,7 +436,7 @@ class NCFiles: NCCollectionViewCommon {
 
     // MARK: - NCAccountSettingsModelDelegate
 
-    override func accountSettingsDidDismiss(tableAccount: tableAccount?, controller: NCMainTabBarController?) {
+    override func accountSettingsDidDismiss(tblAccount: tableAccount?, controller: NCMainTabBarController?) {
         let currentAccount = session.account
 
         if database.getAllTableAccount().isEmpty {
@@ -398,13 +449,17 @@ class NCFiles: NCCollectionViewCommon {
             }
 
             UIApplication.shared.firstWindow?.rootViewController = navigationController
-        } else if let account = tableAccount?.account, account != currentAccount {
-            NCAccount().changeAccount(account, userProfile: nil, controller: controller) { }
+        } else if let account = tblAccount?.account, account != currentAccount {
+            Task {
+                await NCAccount().changeAccount(account, userProfile: nil, controller: controller)
+            }
         } else if self.serverUrl == self.utilityFileSystem.getHomeServer(session: self.session) {
             self.titleCurrentFolder = getNavigationTitle()
             navigationItem.title = self.titleCurrentFolder
         }
 
-        (self.navigationController as? NCMainNavigationController)?.setNavigationLeftItems()
+        Task {
+            await (self.navigationController as? NCMainNavigationController)?.setNavigationLeftItems()
+        }
     }
 }

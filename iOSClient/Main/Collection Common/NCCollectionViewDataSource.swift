@@ -1,25 +1,6 @@
-//
-//  NCCollectionViewDataSource.swift
-//  Nextcloud
-//
-//  Created by Marino Faggiana on 06/09/2020.
-//  Copyright © 2020 Marino Faggiana. All rights reserved.
-//
-//  Author Marino Faggiana <marino.faggiana@nextcloud.com>
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU General Public License for more details.
-//
-//  You should have received a copy of the GNU General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-//
+// SPDX-FileCopyrightText: Nextcloud GmbH
+// SPDX-FileCopyrightText: 2020 Marino Faggiana
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 import UIKit
 import NextcloudKit
@@ -30,13 +11,13 @@ class NCCollectionViewDataSource: NSObject {
     private let utility = NCUtility()
     private let global = NCGlobal.shared
     private let database = NCManageDatabase.shared
+
     private var sectionsValue: [String] = []
     private var providers: [NKSearchProvider]?
     private var searchResults: [NKSearchResult]?
     private var metadatas: [tableMetadata] = []
     private var metadatasForSection: [NCMetadataForSection] = []
     private var layoutForView: NCDBLayoutForView?
-    private var metadataIndexPath = ThreadSafeDictionary<IndexPath, tableMetadata>()
     private var directoryOnTop: Bool = true
     private var favoriteOnTop: Bool = true
 
@@ -53,10 +34,10 @@ class NCCollectionViewDataSource: NSObject {
         self.metadatas = metadatas
         self.layoutForView = layoutForView
         if let account {
-            self.directoryOnTop = NCKeychain().getDirectoryOnTop(account: account)
-            self.favoriteOnTop = NCKeychain().getFavoriteOnTop(account: account)
+            self.directoryOnTop = NCPreferences().getDirectoryOnTop(account: account)
+            self.favoriteOnTop = NCPreferences().getFavoriteOnTop(account: account)
         }
-        /// unified search
+        // unified search
         self.providers = providers
         self.searchResults = searchResults
 
@@ -69,7 +50,6 @@ class NCCollectionViewDataSource: NSObject {
 
     func removeAll() {
         self.metadatas.removeAll()
-        self.metadataIndexPath.removeAll()
         self.metadatasForSection.removeAll()
         self.sectionsValue.removeAll()
         self.providers = nil
@@ -88,8 +68,8 @@ class NCCollectionViewDataSource: NSObject {
 
     internal func createSections() {
         for metadata in self.metadatas {
-            /// skipped livePhoto VIDEO part
-            if metadata.isLivePhoto, metadata.classFile == NKCommon.TypeClassFile.video.rawValue {
+            // skipped livePhoto VIDEO part
+            if metadata.isLivePhoto, metadata.classFile == NKTypeClassFile.video.rawValue {
                 continue
             }
             let section = NSLocalizedString(self.getSectionValue(metadata: metadata), comment: "")
@@ -97,7 +77,7 @@ class NCCollectionViewDataSource: NSObject {
                 self.sectionsValue.append(section)
             }
         }
-        /// Unified search
+        // Unified search
         if let providers = self.providers, !providers.isEmpty {
             let sectionsDictionary = ThreadSafeDictionary<String, Int>()
             for section in self.sectionsValue {
@@ -115,7 +95,7 @@ class NCCollectionViewDataSource: NSObject {
                 }
             }
         } else {
-            /// normal
+            // normal
             let favorite = NSLocalizedString("favorite", comment: "").lowercased().firstUppercased
             let directory = NSLocalizedString("directory", comment: "").lowercased().firstUppercased
 
@@ -201,7 +181,9 @@ class NCCollectionViewDataSource: NSObject {
     }
 
     func getIndexPathMetadata(ocId: String) -> IndexPath? {
-        guard self.sectionsValue.isEmpty else { return nil }
+        guard self.sectionsValue.isEmpty else {
+            return nil
+        }
 
         if let rowIndex = metadatas.firstIndex(where: {$0.ocId == ocId}) {
             return IndexPath(row: rowIndex, section: 0)
@@ -211,7 +193,9 @@ class NCCollectionViewDataSource: NSObject {
     }
 
     func numberOfSections() -> Int {
-        guard !self.sectionsValue.isEmpty else { return 1 }
+        guard !self.sectionsValue.isEmpty else {
+            return 1
+        }
 
         return self.sectionsValue.count
     }
@@ -222,8 +206,7 @@ class NCCollectionViewDataSource: NSObject {
         }
 
         guard !self.metadatas.isEmpty,
-              let metadataForSection = getMetadataForSection(section)
-        else {
+              let metadataForSection = getMetadataForSection(section) else {
             return 0
         }
 
@@ -264,71 +247,18 @@ class NCCollectionViewDataSource: NSObject {
         return nil
     }
 
-    func getMetadata(indexPath: IndexPath,
-                     completion: @escaping  (_ metadata: tableMetadata?) -> Void) {
-        var result: tableMetadata?
-
-        if !metadatasForSection.isEmpty, indexPath.section < metadatasForSection.count {
-            if let metadataForSection = getMetadataForSection(indexPath.section),
-               indexPath.row < metadataForSection.metadatas.count {
-                result = metadataForSection.metadatas[indexPath.row]
-            }
-        } else if indexPath.row < self.metadatas.count {
-            result = metadataIndexPath[indexPath]
-        }
-
-        if let result {
-            self.database.getMetadataFromOcId(result.ocId) { metadata in
-                completion(metadata)
-            }
-        } else {
-            completion(result)
-        }
-    }
-
     func getMetadata(indexPath: IndexPath) -> tableMetadata? {
         if !metadatasForSection.isEmpty, indexPath.section < metadatasForSection.count {
             if let metadataForSection = getMetadataForSection(indexPath.section),
                indexPath.row < metadataForSection.metadatas.count {
-                return tableMetadata(value: metadataForSection.metadatas[indexPath.row])
+                return metadataForSection.metadatas[indexPath.row].detachedCopy()
             }
         } else if indexPath.row < self.metadatas.count {
-            return metadataIndexPath[indexPath]
+            let metadata = self.metadatas[indexPath.row]
+            return metadata
         }
 
         return nil
-    }
-
-    func caching(metadatas: [tableMetadata], completion: @escaping () -> Void) {
-        var counter: Int = 0
-
-        for metadata in metadatas {
-            let metadata = tableMetadata(value: metadata)
-            let indexPath = IndexPath(row: counter, section: 0)
-            self.metadataIndexPath[indexPath] = tableMetadata(value: metadata)
-
-            /// caching preview
-            ///
-            if metadata.isImageOrVideo,
-               NCImageCache.shared.getImageCache(ocId: metadata.ocId, etag: metadata.etag, ext: self.global.previewExt256) == nil,
-               let image = self.utility.getImage(ocId: metadata.ocId, etag: metadata.etag, ext: self.global.previewExt256) {
-                NCImageCache.shared.addImageCache(ocId: metadata.ocId, etag: metadata.etag, image: image, ext: self.global.previewExt256, cost: counter)
-            }
-
-            counter += 1
-        }
-
-        DispatchQueue.main.async {
-            return completion()
-        }
-    }
-
-    func removeImageCache() {
-        DispatchQueue.global().async {
-            for metadata in self.metadatas {
-                NCImageCache.shared.removeImageCache(ocIdPlusEtag: metadata.ocId + metadata.etag)
-            }
-        }
     }
 
     // MARK: -
@@ -456,13 +386,13 @@ class NCMetadataForSection: NSObject {
         for metadata in metadatasSorted {
 
             // skipped the root file
-            if metadata.fileName == "." || metadata.serverUrl == ".." {
+            if metadata.fileName == NextcloudKit.shared.nkCommonInstance.rootFileName {
                 continue
             }
 
             // skipped livePhoto VIDEO part
             if metadata.isLivePhoto,
-               metadata.classFile == NKCommon.TypeClassFile.video.rawValue {
+               metadata.classFile == NKTypeClassFile.video.rawValue {
                 continue
             }
 
